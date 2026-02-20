@@ -8,6 +8,8 @@ import psycopg2
 import psycopg2.extras
 from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
+from db import get_snapshot, has_recent_event, get_last_seen_from_db
+from forecast import get_forecast
 
 load_dotenv()
 
@@ -26,7 +28,9 @@ PLANES = {
 active_planes = set()
 notified_planes = set()
 last_seen = {}
+on_ground_state = {}
 LANDING_GRACE_PERIOD = 600
+APPEARED_THRESHOLD = 7200  # 2 hours
 
 
 def get_db():
@@ -56,7 +60,7 @@ def save_position(icao24, plane_data):
                     plane_data.get("altitude") if plane_data.get("altitude") != "N/A" else None,
                     plane_data.get("velocity") if plane_data.get("velocity") != "N/A" else None,
                     plane_data.get("heading") if plane_data.get("heading") != "N/A" else None,
-                    False,
+                    plane_data.get("on_ground", False),
                     plane_data.get("source"),
                 ))
     except Exception as e:
@@ -69,6 +73,9 @@ def save_flight_event(icao24, event_type, data=None):
             with conn.cursor() as cur:
                 aircraft_id = get_aircraft_id(cur, icao24)
                 if not aircraft_id:
+                    return
+                if has_recent_event(conn, aircraft_id, event_type.upper()):
+                    print(f"  Dedup: skipping {event_type.upper()} for {icao24}")
                     return
                 cur.execute("""
                     INSERT INTO events (aircraft_id, type, meta)
@@ -166,6 +173,7 @@ def check_adsb_one(icao24):
                     "heading": aircraft.get("track", "N/A"),
                     "baro_rate": aircraft.get("baro_rate", "N/A"),
                     "squawk": aircraft.get("squawk", ""),
+                    "on_ground": False,
                     "source": "ADSB.one"
                 }
     except Exception as e:
@@ -198,7 +206,8 @@ def check_opensky():
                         "lon": state[5] if state[5] is not None else "N/A",
                         "heading": state[10] if state[10] is not None else "N/A",
                         "baro_rate": baro_rate_fpm,
-                        "squawk": "",
+                        "squawk": state[14] if len(state) > 14 and state[14] else "",
+                        "on_ground": bool(state[8]) if state[8] is not None else False,
                         "source": "OpenSky"
                     }
     except Exception as e:
@@ -207,7 +216,7 @@ def check_opensky():
 
 
 def check_flights():
-    global active_planes, last_seen, notified_planes
+    global active_planes, last_seen, notified_planes, on_ground_state
     currently_flying = set()
     planes_info = []
 
@@ -291,6 +300,20 @@ def check_flights():
                 "source": plane_data["source"]
             })
 
+        # APPEARED: plane not seen for > 2h
+        prev_ts = last_seen.get(registration)
+        if prev_ts and (current_timestamp - prev_ts) > APPEARED_THRESHOLD:
+            gap_h = int((current_timestamp - prev_ts) / 3600)
+            save_flight_event(icao24, "appeared", {"gap_seconds": int(current_timestamp - prev_ts)})
+            notify_telegram(f"👀 {registration} reapareció después de {gap_h}h sin señal")
+
+        # EMERGENCY: save to DB (Telegram already handled above for new flights)
+        squawk = plane_data.get("squawk", "")
+        if squawk in ("7700", "7600", "7500"):
+            save_flight_event(icao24, "emergency", {"squawk": squawk})
+
+        on_ground_state[registration] = plane_data.get("on_ground", False)
+
     planes_to_remove = []
     for plane in active_planes - currently_flying:
         if plane in last_seen:
@@ -319,7 +342,7 @@ def check_flights():
 def monitor_flights():
     while True:
         check_flights()
-        time.sleep(300)
+        time.sleep(25)
 
 
 @app.route('/')
@@ -446,6 +469,24 @@ def index():
     return html
 
 
+@app.route('/dashboard/snapshot')
+def dashboard_snapshot():
+    try:
+        with get_db() as conn:
+            return jsonify(get_snapshot(conn))
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/forecast/24h')
+def forecast_24h():
+    try:
+        with get_db() as conn:
+            return jsonify(get_forecast(conn))
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route('/api/check')
 def api_check():
     planes_info = check_flights()
@@ -504,6 +545,14 @@ def start_monitor_thread():
         print("✅ Monitor automático iniciado en thread background")
     return None
 
+
+try:
+    with get_db() as conn:
+        for tail, ts in get_last_seen_from_db(conn).items():
+            last_seen[tail] = ts
+    print(f"Initialized last_seen from DB: {list(last_seen.keys())}")
+except Exception as e:
+    print(f"Could not initialize last_seen from DB: {e}")
 
 enable_monitor = os.getenv('ENABLE_MONITOR', 'false').lower() == 'true'
 

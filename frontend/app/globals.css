@@ -1,0 +1,18 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Leaflet popup dark theme override */
+.leaflet-popup-content-wrapper {
+  background: #1e293b;
+  color: #e2e8f0;
+  border: 1px solid #334155;
+  border-radius: 6px;
+}
+.leaflet-popup-tip {
+  background: #1e293b;
+}
+.leaflet-popup-content {
+  margin: 8px 12px;
+  line-height: 1.6;
+}

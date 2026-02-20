@@ -49,5 +49,18 @@ venv/
 flight_history.json
 plane_state.json
 
+# Credentials and secrets
+credentials_opensky.json
+*.Zone.Identifier
+
+# Import script output
+import_history.sql
+import_history_output.txt
+
 # Embedded repos
 platanus-build-night-26-ba-ignaciogomenuka/
+
+# Next.js
+frontend/.next/
+frontend/node_modules/
+frontend/.env.local
