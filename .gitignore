@@ -1,0 +1,53 @@
+# Environment files
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environment
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Virtual environment (already specified above but adding here for clarity)
+venv/
+
+# Logs and backups
+*.log
+*.backup
+
+# Runtime data (now stored in Supabase)
+flight_history.json
+plane_state.json
+
+# Embedded repos
+platanus-build-night-26-ba-ignaciogomenuka/

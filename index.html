@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Monitor de Vuelos Privados</title>
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
+        .plane { background: #f0f0f0; padding: 15px; margin: 10px 0; border-radius: 8px; }
+        .flying { background: #e7f5e7; border-left: 4px solid #28a745; }
+        .status { font-weight: bold; color: #28a745; }
+        button { background: #007bff; color: white; padding: 10px 20px; border: none; border-radius: 4px; cursor: pointer; }
+        button:hover { background: #0056b3; }
+        .timestamp { color: #666; font-size: 0.9em; }
+    </style>
+</head>
+<body>
+    <h1>🛩️ Monitor de Vuelos Privados</h1>
+    <p>Monitoreo en tiempo real de las matrículas: LV-FVZ, LV-FUF, LV-KMA, LV-CCO</p>
+
+    <button onclick="checkFlights()">🔄 Verificar Vuelos</button>
+
+    <div id="status"></div>
+    <div id="results"></div>
+
+    <script>
+        async function checkFlights() {
+            document.getElementById('status').innerHTML = '<p>🔍 Consultando API...</p>';
+
+            try {
+                const response = await fetch('/api/check');
+                const data = await response.json();
+
+                document.getElementById('status').innerHTML = `
+                    <p class="timestamp">Última verificación: ${data.timestamp}</p>
+                `;
+
+                const resultsDiv = document.getElementById('results');
+
+                if (data.planes_en_vuelo > 0) {
+                    let html = `<h3>✈️ Aviones en vuelo (${data.planes_en_vuelo})</h3>`;
+                    data.aviones.forEach(plane => {
+                        html += `
+                            <div class="plane flying">
+                                <div class="status">🟢 ${plane.callsign} EN VUELO</div>
+                                <p>Altitud: ${plane.altitude} m | Velocidad: ${plane.velocity} km/h</p>
+                                <p>País: ${plane.country} | Posición: ${plane.lat}, ${plane.lon}</p>
+                            </div>
+                        `;
+                    });
+                    resultsDiv.innerHTML = html;
+                } else {
+                    resultsDiv.innerHTML = `
+                        <div class="plane">
+                            <div class="status">🔴 Ningún avión en vuelo</div>
+                            <p>No se detectaron vuelos activos para las matrículas monitoreadas.</p>
+                        </div>
+                    `;
+                }
+            } catch (error) {
+                document.getElementById('results').innerHTML = `
+                    <div class="plane" style="background: #f8d7da; border-left: 4px solid #dc3545;">
+                        <div style="color: #721c24;">❌ Error al consultar API</div>
+                        <p>No se pudo conectar con el servicio de monitoreo.</p>
+                    </div>
+                `;
+            }
+        }
+
+        // Verificar automáticamente al cargar la página
+        checkFlights();
+    </script>
+</body>
+</html>
