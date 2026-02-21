@@ -203,6 +203,7 @@ export default function Dashboard() {
   const [playSpeed, setPlaySpeed]           = useState<1 | 4>(1);
   const [replayLoading, setReplayLoading]   = useState(false);
   const [replayAircraft, setReplayAircraft] = useState('');
+  const [activeTab, setActiveTab]           = useState<'fleet' | 'analytics'>('fleet');
 
   // Monthly analytics state
   const today   = new Date().toISOString().slice(0, 10);
@@ -381,7 +382,7 @@ export default function Dashboard() {
   const mkpi = monthly?.kpis;
 
   return (
-    <div className="bg-gray-950 text-gray-100 overflow-y-auto">
+    <div className="bg-gray-950 text-gray-100">
     <div className="flex flex-col h-screen overflow-hidden">
 
       {/* ── Error banner ── */}
@@ -593,231 +594,206 @@ export default function Dashboard() {
         </aside>
       </div>
 
-      {/* ── Bottom: Fleet table ── */}
-      <div className="h-44 shrink-0 border-t border-gray-800 bg-gray-900 flex flex-col">
-        <div className="flex items-center gap-2 px-3 py-1.5 border-b border-gray-800 shrink-0">
-          <span className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider mr-1">Fleet</span>
-          <input
-            type="text"
-            placeholder="Search tail / ICAO…"
-            value={search}
-            onChange={e => setSearch(e.target.value)}
-            className="bg-gray-800 text-gray-200 text-[11px] rounded px-2 py-1 w-36 placeholder-gray-600 outline-none focus:ring-1 focus:ring-blue-700 transition-shadow"
-          />
-          <select
-            value={statusFilter}
-            onChange={e => setStatus(e.target.value as typeof statusFilter)}
-            className="bg-gray-800 text-gray-200 text-[11px] rounded px-2 py-1 outline-none focus:ring-1 focus:ring-blue-700"
-          >
-            <option value="all">All</option>
-            <option value="in_air">In Air</option>
-            <option value="on_ground">On Ground</option>
-          </select>
-          {!isLoading && (
-            <span className="ml-auto text-[10px] text-gray-600">{filteredPositions.length} aircraft</span>
+      {/* ── Bottom Tabbed Panel ── */}
+      <div className={`shrink-0 border-t border-gray-800 bg-gray-900 flex flex-col transition-[height] duration-300 ease-in-out ${
+        activeTab === 'analytics' ? 'h-80' : 'h-44'
+      }`}>
+
+        {/* Tab bar */}
+        <div className="flex items-center h-8 border-b border-gray-800 shrink-0">
+          {(['fleet', 'analytics'] as const).map(tab => (
+            <button
+              key={tab}
+              onClick={() => setActiveTab(tab)}
+              className={`shrink-0 px-3 h-full text-[11px] font-medium border-r border-gray-800 transition-colors ${
+                activeTab === tab
+                  ? 'text-white bg-gray-800/60 border-b-2 border-b-blue-500'
+                  : 'text-gray-500 hover:text-gray-300 hover:bg-gray-800/30'
+              }`}
+            >
+              {tab === 'fleet' ? 'Fleet' : 'Analytics'}
+            </button>
+          ))}
+
+          {/* Fleet controls */}
+          {activeTab === 'fleet' && (
+            <div className="flex items-center gap-2 px-3 ml-2 text-[11px]">
+              <input
+                type="text" placeholder="Search tail / ICAO…" value={search}
+                onChange={e => setSearch(e.target.value)}
+                className="bg-gray-800 text-gray-200 text-[11px] rounded px-2 py-0.5 w-32 placeholder-gray-600 outline-none focus:ring-1 focus:ring-blue-700"
+              />
+              <select
+                value={statusFilter} onChange={e => setStatus(e.target.value as typeof statusFilter)}
+                className="bg-gray-800 text-gray-200 text-[11px] rounded px-2 py-0.5 outline-none focus:ring-1 focus:ring-blue-700"
+              >
+                <option value="all">All</option>
+                <option value="in_air">In Air</option>
+                <option value="on_ground">On Ground</option>
+              </select>
+              {!isLoading && <span className="text-gray-600">{filteredPositions.length} aircraft</span>}
+            </div>
+          )}
+
+          {/* Analytics controls */}
+          {activeTab === 'analytics' && (
+            <div className="flex items-center gap-2 px-3 ml-2 text-[11px]">
+              <label className="text-gray-500 shrink-0">From</label>
+              <input type="date" value={mFilters.startDate}
+                onChange={e => setMFilters(f => ({ ...f, startDate: e.target.value }))}
+                className="bg-gray-800 text-gray-200 rounded px-2 py-0.5 text-[11px] outline-none focus:ring-1 focus:ring-blue-700" />
+              <label className="text-gray-500 shrink-0">To</label>
+              <input type="date" value={mFilters.endDate}
+                onChange={e => setMFilters(f => ({ ...f, endDate: e.target.value }))}
+                className="bg-gray-800 text-gray-200 rounded px-2 py-0.5 text-[11px] outline-none focus:ring-1 focus:ring-blue-700" />
+              <select value={mFilters.aircraft} onChange={e => setMFilters(f => ({ ...f, aircraft: e.target.value }))}
+                className="bg-gray-800 text-gray-200 text-[11px] rounded px-2 py-0.5 outline-none focus:ring-1 focus:ring-blue-700">
+                <option value="">All aircraft</option>
+                {PLANES.map(p => <option key={p.icao24} value={p.icao24}>{p.tail}</option>)}
+              </select>
+              {(mLoading || topDestLoading) && <span className="text-gray-600 animate-pulse">Loading…</span>}
+            </div>
           )}
         </div>
 
-        <div className="overflow-y-auto flex-1">
-          <table className="w-full text-[11px]">
-            <thead className="sticky top-0 bg-gray-900/95 backdrop-blur-sm z-10">
-              <tr className="text-gray-500 text-left border-b border-gray-800">
-                {['Tail', 'ICAO24', 'Status', 'Altitude', 'Speed', 'Heading', 'Source', 'Last seen'].map(h => (
-                  <th key={h} className="px-3 py-1.5 font-medium">{h}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-800/50">
-
-              {isLoading && Array.from({ length: 4 }).map((_, i) => (
-                <tr key={i}>
-                  {Array.from({ length: 8 }).map((_, j) => (
-                    <td key={j} className="px-3 py-2">
-                      <Skeleton className="h-3" style={{ width: `${40 + (j * 13) % 40}px` }} />
-                    </td>
+        {/* ── Fleet content ── */}
+        {activeTab === 'fleet' && (
+          <div className="overflow-y-auto flex-1">
+            <table className="w-full text-[11px]">
+              <thead className="sticky top-0 bg-gray-900/95 backdrop-blur-sm z-10">
+                <tr className="text-gray-500 text-left border-b border-gray-800">
+                  {['Tail', 'ICAO24', 'Status', 'Altitude', 'Speed', 'Heading', 'Source', 'Last seen'].map(h => (
+                    <th key={h} className="px-3 py-1.5 font-medium">{h}</th>
                   ))}
                 </tr>
-              ))}
-
-              {!isLoading && filteredPositions.map(p => (
-                <tr key={p.icao24} className="hover:bg-gray-800/40 transition-colors">
-                  <td className="px-3 py-1.5 font-semibold text-white">{p.tail_number}</td>
-                  <td className="px-3 py-1.5 text-gray-400 font-mono">{p.icao24}</td>
-                  <td className="px-3 py-1.5">
-                    <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold uppercase ${
-                      p.on_ground ? 'bg-gray-700 text-gray-400' : 'bg-green-900/80 text-green-300 ring-1 ring-green-800'
-                    }`}>
-                      {p.on_ground ? 'Ground' : 'Air'}
-                    </span>
-                  </td>
-                  <td className="px-3 py-1.5 text-gray-300">{p.altitude != null ? `${Math.round(p.altitude)} ft` : '—'}</td>
-                  <td className="px-3 py-1.5 text-gray-300">{p.velocity != null ? `${Math.round(p.velocity)} km/h` : '—'}</td>
-                  <td className="px-3 py-1.5 text-gray-300">{p.heading != null ? `${Math.round(p.heading)}°` : '—'}</td>
-                  <td className="px-3 py-1.5 text-gray-500">{p.source}</td>
-                  <td className="px-3 py-1.5 text-gray-500">{relTime(p.ts)}</td>
-                </tr>
-              ))}
-
-              {!isLoading && filteredPositions.length === 0 && (
-                <tr>
-                  <td colSpan={8} className="px-3 py-6 text-center text-gray-600 text-xs">
-                    {search || statusFilter !== 'all'
-                      ? 'No aircraft match your filters.'
-                      : 'No aircraft positions recorded yet.'}
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
-    </div>
-
-    {/* ── Scroll hint ── */}
-    <div className="flex items-center justify-center gap-2 py-1.5 bg-gray-900 border-t border-gray-800 text-[10px] text-gray-600 select-none">
-      <span>▼</span>
-      <span>Monthly Activity · Top Destinations</span>
-      <span>▼</span>
-    </div>
-
-    {/* ── Monthly Activity + Top Destinations ── */}
-    <div className="border-t border-gray-800 bg-gray-900 px-5 py-4">
-
-      {/* Section header + shared filters */}
-      <div className="flex items-center justify-between mb-3">
-        <span className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider">Analytics</span>
-        {(mLoading || topDestLoading) && <span className="text-[10px] text-gray-600 animate-pulse">Loading…</span>}
-      </div>
-
-      <div className="flex flex-wrap items-center gap-2 mb-4">
-        <div className="flex items-center gap-1 text-[11px]">
-          <label className="text-gray-500">From</label>
-          <input
-            type="date" value={mFilters.startDate}
-            onChange={e => setMFilters(f => ({ ...f, startDate: e.target.value }))}
-            className="bg-gray-800 text-gray-200 rounded px-2 py-1 text-[11px] outline-none focus:ring-1 focus:ring-blue-700"
-          />
-        </div>
-        <div className="flex items-center gap-1 text-[11px]">
-          <label className="text-gray-500">To</label>
-          <input
-            type="date" value={mFilters.endDate}
-            onChange={e => setMFilters(f => ({ ...f, endDate: e.target.value }))}
-            className="bg-gray-800 text-gray-200 rounded px-2 py-1 text-[11px] outline-none focus:ring-1 focus:ring-blue-700"
-          />
-        </div>
-        <select
-          value={mFilters.aircraft}
-          onChange={e => setMFilters(f => ({ ...f, aircraft: e.target.value }))}
-          className="bg-gray-800 text-gray-200 text-[11px] rounded px-2 py-1 outline-none focus:ring-1 focus:ring-blue-700"
-        >
-          <option value="">All aircraft</option>
-          {PLANES.map(p => <option key={p.icao24} value={p.icao24}>{p.tail}</option>)}
-        </select>
-      </div>
-
-      {/* 2-column grid: left = monthly activity, right = top destinations */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-
-        {/* ── Left: Monthly Activity ── */}
-        <div>
-          <div className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider mb-3">Monthly Activity</div>
-
-          {/* KPI cards */}
-          <div className="grid grid-cols-4 gap-2 mb-4">
-            {([
-              { label: 'Total Flights',   value: mkpi?.total_flights,   color: 'text-white' },
-              { label: 'Takeoffs',        value: mkpi?.takeoffs,        color: 'text-green-400' },
-              { label: 'Landings',        value: mkpi?.landings,        color: 'text-blue-400' },
-              { label: 'Active Aircraft', value: mkpi?.active_aircraft, color: 'text-purple-400' },
-            ] as const).map(({ label, value, color }) => (
-              <div key={label} className="bg-gray-800 rounded p-3">
-                {mLoading
-                  ? <Skeleton className="h-6 w-12 mb-1" />
-                  : <div className={`text-xl font-bold ${color}`}>{value ?? '—'}</div>}
-                <div className="text-[9px] text-gray-500 mt-0.5 uppercase tracking-wide">{label}</div>
-              </div>
-            ))}
+              </thead>
+              <tbody className="divide-y divide-gray-800/50">
+                {isLoading && Array.from({ length: 4 }).map((_, i) => (
+                  <tr key={i}>
+                    {Array.from({ length: 8 }).map((_, j) => (
+                      <td key={j} className="px-3 py-2">
+                        <Skeleton className="h-3" style={{ width: `${40 + (j * 13) % 40}px` }} />
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+                {!isLoading && filteredPositions.map(p => (
+                  <tr key={p.icao24} className="hover:bg-gray-800/40 transition-colors">
+                    <td className="px-3 py-1.5 font-semibold text-white">{p.tail_number}</td>
+                    <td className="px-3 py-1.5 text-gray-400 font-mono">{p.icao24}</td>
+                    <td className="px-3 py-1.5">
+                      <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold uppercase ${
+                        p.on_ground ? 'bg-gray-700 text-gray-400' : 'bg-green-900/80 text-green-300 ring-1 ring-green-800'
+                      }`}>
+                        {p.on_ground ? 'Ground' : 'Air'}
+                      </span>
+                    </td>
+                    <td className="px-3 py-1.5 text-gray-300">{p.altitude != null ? `${Math.round(p.altitude)} ft` : '—'}</td>
+                    <td className="px-3 py-1.5 text-gray-300">{p.velocity != null ? `${Math.round(p.velocity)} km/h` : '—'}</td>
+                    <td className="px-3 py-1.5 text-gray-300">{p.heading != null ? `${Math.round(p.heading)}°` : '—'}</td>
+                    <td className="px-3 py-1.5 text-gray-500">{p.source}</td>
+                    <td className="px-3 py-1.5 text-gray-500">{relTime(p.ts)}</td>
+                  </tr>
+                ))}
+                {!isLoading && filteredPositions.length === 0 && (
+                  <tr>
+                    <td colSpan={8} className="px-3 py-6 text-center text-gray-600 text-xs">
+                      {search || statusFilter !== 'all' ? 'No aircraft match your filters.' : 'No aircraft positions recorded yet.'}
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
           </div>
+        )}
 
-          {/* Monthly bar chart */}
-          <div>
-            <div className="text-[9px] text-gray-500 uppercase tracking-wide mb-1">Flights per month</div>
-            {mLoading
-              ? <Skeleton className="h-20 w-full" />
-              : <MonthlyChart series={monthly?.monthly_series ?? []} />}
-          </div>
-        </div>
+        {/* ── Analytics content ── */}
+        {activeTab === 'analytics' && (
+          <div className="flex-1 min-h-0 overflow-y-auto px-4 py-3">
 
-        {/* ── Right: Top Destinations ── */}
-        <div>
-          <div className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider mb-3">Top Destinations</div>
-
-          {topDestLoading && (
-            <div className="flex flex-col gap-2">
-              {Array.from({ length: 6 }).map((_, i) => (
-                <div key={i} className="flex items-center gap-2">
-                  <Skeleton className="h-4 w-8 shrink-0" />
-                  <Skeleton className="h-4 flex-1" />
-                  <Skeleton className="h-4 w-6 shrink-0" />
+            {/* KPI strip */}
+            <div className="grid grid-cols-4 gap-2 mb-3">
+              {([
+                { label: 'Total Flights',   value: mkpi?.total_flights,   color: 'text-white' },
+                { label: 'Takeoffs',        value: mkpi?.takeoffs,        color: 'text-green-400' },
+                { label: 'Landings',        value: mkpi?.landings,        color: 'text-blue-400' },
+                { label: 'Active Aircraft', value: mkpi?.active_aircraft, color: 'text-purple-400' },
+              ] as const).map(({ label, value, color }) => (
+                <div key={label} className="bg-gray-800/60 rounded px-3 py-2 flex items-center gap-3">
+                  {mLoading
+                    ? <Skeleton className="h-5 w-10" />
+                    : <span className={`text-lg font-bold ${color}`}>{value ?? '—'}</span>}
+                  <span className="text-[9px] text-gray-500 uppercase tracking-wide leading-tight">{label}</span>
                 </div>
               ))}
             </div>
-          )}
 
-          {!topDestLoading && topDest.length === 0 && (
-            <div className="flex flex-col items-center justify-center py-8 text-center">
-              <div className="text-2xl mb-2 opacity-30">✈</div>
-              <p className="text-xs text-gray-600">No destination data yet.<br />Landings accumulate over time.</p>
-            </div>
-          )}
+            {/* Charts row */}
+            <div className="grid grid-cols-2 gap-4">
 
-          {!topDestLoading && topDest.length > 0 && (() => {
-            const shown = topDest.slice(0, 10);
-            const maxCount = shown[0]?.count ?? 1;
-            const known   = shown.filter(d => d.airport !== 'UNKNOWN');
-            const unknown = shown.filter(d => d.airport === 'UNKNOWN');
-            const ordered = [...known, ...unknown];
-            return (
-              <ol className="flex flex-col gap-1.5">
-                {ordered.map((d, i) => {
-                  const isUnknown = d.airport === 'UNKNOWN';
-                  const pct = Math.round((d.count / maxCount) * 100);
+              {/* Monthly chart */}
+              <div>
+                <div className="text-[9px] text-gray-500 uppercase tracking-wide mb-1">Flights per month</div>
+                {mLoading
+                  ? <Skeleton className="h-24 w-full" />
+                  : <MonthlyChart series={monthly?.monthly_series ?? []} />}
+              </div>
+
+              {/* Top destinations */}
+              <div>
+                <div className="text-[9px] text-gray-500 uppercase tracking-wide mb-1">Top destinations</div>
+
+                {topDestLoading && (
+                  <div className="flex flex-col gap-1.5">
+                    {Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-4 w-full" />)}
+                  </div>
+                )}
+
+                {!topDestLoading && topDest.length === 0 && (
+                  <div className="text-xs text-gray-600 py-4 text-center">No destination data yet</div>
+                )}
+
+                {!topDestLoading && topDest.length > 0 && (() => {
+                  const shown = topDest.slice(0, 8);
+                  const maxCount = shown[0]?.count ?? 1;
+                  const ordered = [...shown.filter(d => d.airport !== 'UNKNOWN'), ...shown.filter(d => d.airport === 'UNKNOWN')];
                   return (
-                    <li key={d.airport} className="flex items-center gap-2 text-[11px]">
-                      <span className={`w-5 text-right shrink-0 font-mono ${isUnknown ? 'text-gray-600' : 'text-gray-500'}`}>
-                        {isUnknown ? '—' : i + 1}
-                      </span>
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center justify-between gap-1 mb-0.5">
-                          <span className={`font-semibold truncate ${isUnknown ? 'text-gray-600' : 'text-gray-200'}`}>
-                            {isUnknown ? 'Unknown airport' : d.airport}
-                          </span>
-                          <span className={`shrink-0 font-mono text-[10px] ${isUnknown ? 'text-gray-600' : 'text-gray-400'}`}>
-                            {d.count}
-                          </span>
-                        </div>
-                        <div className="h-1 rounded-full bg-gray-800 overflow-hidden">
-                          <div
-                            className={`h-full rounded-full transition-all ${isUnknown ? 'bg-gray-700' : 'bg-blue-600'}`}
-                            style={{ width: `${pct}%` }}
-                          />
-                        </div>
-                        {!isUnknown && d.name && d.name !== d.airport && (
-                          <div className="text-[9px] text-gray-600 truncate mt-0.5">{d.name}</div>
-                        )}
-                      </div>
-                    </li>
+                    <ol className="flex flex-col gap-1">
+                      {ordered.map((d, i) => {
+                        const isUnknown = d.airport === 'UNKNOWN';
+                        const pct = Math.round((d.count / maxCount) * 100);
+                        return (
+                          <li key={d.airport} className="flex items-center gap-2 text-[11px]">
+                            <span className={`w-4 text-right shrink-0 font-mono text-[10px] ${isUnknown ? 'text-gray-600' : 'text-gray-500'}`}>
+                              {isUnknown ? '—' : i + 1}
+                            </span>
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center justify-between gap-1 mb-0.5">
+                                <span className={`font-medium truncate ${isUnknown ? 'text-gray-600' : 'text-gray-200'}`}>
+                                  {isUnknown ? 'Unknown' : d.airport}
+                                  {!isUnknown && d.name && d.name !== d.airport && (
+                                    <span className="text-gray-600 font-normal ml-1 text-[9px]">{d.name}</span>
+                                  )}
+                                </span>
+                                <span className={`shrink-0 font-mono text-[10px] ${isUnknown ? 'text-gray-600' : 'text-gray-400'}`}>{d.count}</span>
+                              </div>
+                              <div className="h-1 rounded-full bg-gray-800 overflow-hidden">
+                                <div className={`h-full rounded-full ${isUnknown ? 'bg-gray-700' : 'bg-blue-600'}`} style={{ width: `${pct}%` }} />
+                              </div>
+                            </div>
+                          </li>
+                        );
+                      })}
+                    </ol>
                   );
-                })}
-              </ol>
-            );
-          })()}
-        </div>
+                })()}
+              </div>
+            </div>
+          </div>
+        )}
 
       </div>
     </div>
-
     </div>
   );
 }
