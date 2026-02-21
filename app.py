@@ -15,7 +15,9 @@ from airports import nearest_airport
 
 load_dotenv()
 
-ARGENTINA_TZ = timezone(timedelta(hours=-3))
+ARGENTINA_TZ  = timezone(timedelta(hours=-3))
+OPENSKY_USER  = os.getenv('OPENSKY_USER')
+OPENSKY_PASS  = os.getenv('OPENSKY_PASS')
 
 app = Flask(__name__)
 
@@ -539,6 +541,77 @@ def replay_range():
     try:
         with get_db() as conn:
             return jsonify(get_replay_range(conn, start_dt, end_dt, step_s, aircraft_icao24))
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/replay/flight')
+def replay_flight():
+    icao24 = request.args.get('icao24')
+    try:
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                q = """
+                    SELECT e.ts, a.icao24, a.tail_number
+                    FROM events e
+                    JOIN aircraft a ON a.id = e.aircraft_id
+                    WHERE e.type = 'TAKEOFF'
+                      AND e.ts >= NOW() - INTERVAL '30 days'
+                """
+                params = []
+                if icao24:
+                    q += " AND a.icao24 = %s"
+                    params.append(icao24)
+                q += " ORDER BY e.ts DESC LIMIT 1"
+                cur.execute(q, params)
+                ev = cur.fetchone()
+
+        if not ev:
+            return jsonify({"error": "No flights found in the last 30 days"}), 404
+
+        # Fetch real GPS track from OpenSky — pass a timestamp 30 min into the flight
+        unix_time = int(ev['ts'].timestamp()) + 1800
+        url  = f"https://opensky-network.org/api/tracks/all?icao24={ev['icao24']}&time={unix_time}"
+        auth = (OPENSKY_USER, OPENSKY_PASS) if OPENSKY_USER and OPENSKY_PASS else None
+        resp = requests.get(url, auth=auth, timeout=15)
+
+        if not resp.ok:
+            return jsonify({"error": f"OpenSky returned {resp.status_code}"}), 502
+
+        data = resp.json()
+        path = data.get('path') or []
+        if not path:
+            return jsonify({"error": "OpenSky returned no track waypoints for this flight"}), 404
+
+        tail    = ev['tail_number']
+        icao_str = ev['icao24']
+
+        steps = []
+        for wp in path:
+            # OpenSky path format: [unix_time, lat, lon, baro_alt_m, true_track_deg, on_ground]
+            ts_unix, lat, lon, baro_m, heading, on_ground = wp
+            ts_iso  = datetime.fromtimestamp(ts_unix, tz=timezone.utc).isoformat()
+            alt_ft  = round(baro_m * 3.28084) if baro_m is not None else None
+            steps.append({
+                "ts": ts_iso,
+                "fleet_kpis": {"in_air": 1, "on_ground": 4, "seen_last_15m": 1, "events_last_hour": 0},
+                "latest_positions": [{
+                    "tail_number": tail,
+                    "icao24":      icao_str,
+                    "ts":          ts_iso,
+                    "lat":         lat,
+                    "lon":         lon,
+                    "altitude":    alt_ft,
+                    "velocity":    None,
+                    "heading":     heading,
+                    "on_ground":   bool(on_ground),
+                    "source":      "opensky-history",
+                }],
+                "last_50_events": [],
+            })
+
+        return jsonify({"tail_number": tail, "icao24": icao_str, "steps": steps})
+
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 

@@ -313,6 +313,29 @@ export default function Dashboard() {
     return () => clearInterval(id);
   }, [isPlaying, replayMode, playSpeed, replaySteps.length]);
 
+  async function fetchLastFlight() {
+    setReplayLoading(true);
+    try {
+      const p = new URLSearchParams();
+      if (replayAircraft) p.set('icao24', replayAircraft);
+      const res = await fetch(`/replay/flight?${p}`);
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error ?? `HTTP ${res.status}`);
+      }
+      const data = await res.json();
+      if (!data.steps?.length) throw new Error('No track data returned');
+      setReplaySteps(data.steps);
+      setReplayIdx(0);
+      setReplayAircraft(data.icao24);   // auto-select for trail
+      setReplayMode(true);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Last flight fetch failed');
+    } finally {
+      setReplayLoading(false);
+    }
+  }
+
   async function toggleReplay() {
     if (replayMode) {
       setReplayMode(false);
@@ -459,8 +482,17 @@ export default function Dashboard() {
             <option value="">All fleet</option>
             {PLANES.map(p => <option key={p.icao24} value={p.icao24}>{p.tail}</option>)}
           </select>
+          {!replayMode && (
+            <button
+              onClick={fetchLastFlight}
+              disabled={replayLoading}
+              className="px-2 py-1 rounded text-[11px] font-medium transition-colors bg-amber-900/80 hover:bg-amber-800 text-amber-300 disabled:opacity-40"
+            >
+              {replayLoading ? '⏳' : '🛫 Last Flight'}
+            </button>
+          )}
           <button
-            onClick={toggleReplay}
+            onClick={replayMode ? toggleReplay : toggleReplay}
             disabled={replayLoading}
             className={`px-2 py-1 rounded text-[11px] font-medium transition-colors ${
               replayMode
@@ -503,7 +535,9 @@ export default function Dashboard() {
             className="flex-1 accent-indigo-400"
           />
           <span className="text-indigo-300 whitespace-nowrap shrink-0 font-mono">
-            {replaySteps[replayIdx] ? new Date(replaySteps[replayIdx].ts).toLocaleTimeString() : '—'}
+            {replaySteps[replayIdx]
+              ? new Date(replaySteps[replayIdx].ts).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+              : '—'}
           </span>
         </div>
       )}
