@@ -1,6 +1,6 @@
 'use client';
 
-import { MapContainer, TileLayer, Marker, Popup } from 'react-leaflet';
+import { MapContainer, TileLayer, Marker, Popup, Polyline } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 
@@ -37,7 +37,7 @@ function fmt(v: number | null, unit: string) {
   return v != null ? `${Math.round(v)} ${unit}` : '—';
 }
 
-export default function FleetMap({ positions }: { positions: Position[] }) {
+export default function FleetMap({ positions, trail }: { positions: Position[]; trail?: [number, number][] }) {
   const visible = positions.filter(p => p.lat != null && p.lon != null && !p.on_ground);
 
   return (
@@ -47,6 +47,9 @@ export default function FleetMap({ positions }: { positions: Position[] }) {
           url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
           attribution='&copy; <a href="https://carto.com/">CARTO</a>'
         />
+        {trail && trail.length > 1 && (
+          <Polyline positions={trail} color="#f59e0b" weight={2} opacity={0.75} />
+        )}
         {visible.map(p => (
           <Marker key={p.icao24} position={[p.lat!, p.lon!]} icon={planeIcon(p.heading)}>
             <Popup>

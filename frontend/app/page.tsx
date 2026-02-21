@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import dynamic from 'next/dynamic';
 
 const FleetMap = dynamic(() => import('./components/FleetMap'), {
@@ -196,12 +196,13 @@ export default function Dashboard() {
   const [newKeys, setNewKeys]         = useState<Set<string>>(new Set());
 
   // Replay state
-  const [replayMode, setReplayMode]     = useState(false);
-  const [replaySteps, setReplaySteps]   = useState<ReplayStep[]>([]);
-  const [replayIdx, setReplayIdx]       = useState(0);
-  const [isPlaying, setIsPlaying]       = useState(false);
-  const [playSpeed, setPlaySpeed]       = useState<1 | 4>(1);
-  const [replayLoading, setReplayLoading] = useState(false);
+  const [replayMode, setReplayMode]         = useState(false);
+  const [replaySteps, setReplaySteps]       = useState<ReplayStep[]>([]);
+  const [replayIdx, setReplayIdx]           = useState(0);
+  const [isPlaying, setIsPlaying]           = useState(false);
+  const [playSpeed, setPlaySpeed]           = useState<1 | 4>(1);
+  const [replayLoading, setReplayLoading]   = useState(false);
+  const [replayAircraft, setReplayAircraft] = useState('');
 
   // Monthly analytics state
   const today   = new Date().toISOString().slice(0, 10);
@@ -309,7 +310,9 @@ export default function Dashboard() {
     try {
       const end   = new Date();
       const start = new Date(end.getTime() - 2 * 60 * 60 * 1000);
-      const res   = await fetch(`/replay/range?start=${start.toISOString()}&end=${end.toISOString()}&step_seconds=60`);
+      const p     = new URLSearchParams({ start: start.toISOString(), end: end.toISOString(), step_seconds: '60' });
+      if (replayAircraft) p.set('aircraft_icao24', replayAircraft);
+      const res   = await fetch(`/replay/range?${p}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const steps: ReplayStep[] = await res.json();
       setReplaySteps(steps);
@@ -353,6 +356,17 @@ export default function Dashboard() {
 
   const displaySnap = replayMode && replaySteps.length > 0 ? replaySteps[replayIdx] : snapshot;
   const kpis = displaySnap?.fleet_kpis;
+
+  // Trail: accumulate positions of the selected aircraft through replay steps
+  const trail = useMemo<[number, number][]>(() => {
+    if (!replayMode || !replayAircraft || replaySteps.length === 0) return [];
+    const pts: [number, number][] = [];
+    for (let i = 0; i <= replayIdx && i < replaySteps.length; i++) {
+      const pos = replaySteps[i].latest_positions.find(p => p.icao24 === replayAircraft);
+      if (pos && pos.lat != null && pos.lon != null) pts.push([pos.lat, pos.lon]);
+    }
+    return pts;
+  }, [replayMode, replayAircraft, replaySteps, replayIdx]);
 
   const filteredPositions = (displaySnap?.latest_positions ?? []).filter(p => {
     const q = search.toLowerCase();
@@ -404,6 +418,15 @@ export default function Dashboard() {
               Data age: <span className={freshness > 60 ? 'text-yellow-400' : 'text-gray-400'}>{freshness}s</span>
             </span>
           )}
+          <select
+            value={replayAircraft}
+            onChange={e => setReplayAircraft(e.target.value)}
+            disabled={replayMode}
+            className="bg-gray-800 text-gray-200 text-[11px] rounded px-2 py-1 outline-none focus:ring-1 focus:ring-indigo-700 disabled:opacity-40"
+          >
+            <option value="">All fleet</option>
+            {PLANES.map(p => <option key={p.icao24} value={p.icao24}>{p.tail}</option>)}
+          </select>
           <button
             onClick={toggleReplay}
             disabled={replayLoading}
@@ -422,6 +445,11 @@ export default function Dashboard() {
       {replayMode && (
         <div className="flex items-center gap-2 px-4 py-1.5 bg-indigo-950/80 border-b border-indigo-800 shrink-0 text-[11px]">
           <span className="text-indigo-400 font-bold shrink-0">REPLAY</span>
+          {replayAircraft && (
+            <span className="text-indigo-300 bg-indigo-900/60 px-1.5 py-0.5 rounded shrink-0">
+              {PLANES.find(p => p.icao24 === replayAircraft)?.tail ?? replayAircraft}
+            </span>
+          )}
           <button
             onClick={() => setIsPlaying(p => !p)}
             className="px-2 py-0.5 rounded bg-indigo-800 hover:bg-indigo-700 text-white transition-colors"
@@ -503,7 +531,7 @@ export default function Dashboard() {
 
         {/* Center: Map */}
         <div className="flex-1 relative">
-          <FleetMap positions={displaySnap?.latest_positions ?? []} />
+          <FleetMap positions={displaySnap?.latest_positions ?? []} trail={trail.length > 1 ? trail : undefined} />
         </div>
 
         {/* Right: Forecast */}

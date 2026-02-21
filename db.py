@@ -162,26 +162,30 @@ def get_snapshot_at(conn, ts):
     }
 
 
-def get_replay_range(conn, start_dt, end_dt, step_seconds):
+def get_replay_range(conn, start_dt, end_dt, step_seconds, aircraft_icao24=None):
     buffer_start = start_dt - timedelta(hours=1)
+    icao_filter  = " AND a.icao24 = %s" if aircraft_icao24 else ""
+    pos_params   = [buffer_start, end_dt] + ([aircraft_icao24] if aircraft_icao24 else [])
+    evt_params   = [buffer_start, end_dt] + ([aircraft_icao24] if aircraft_icao24 else [])
+
     with conn.cursor() as cur:
-        cur.execute("""
+        cur.execute(f"""
             SELECT p.ts, p.aircraft_id, p.lat, p.lon, p.altitude, p.velocity,
                    p.heading, p.on_ground, p.source, a.tail_number, a.icao24
             FROM positions p
             JOIN aircraft a ON a.id = p.aircraft_id
-            WHERE p.ts >= %s AND p.ts <= %s
+            WHERE p.ts >= %s AND p.ts <= %s{icao_filter}
             ORDER BY p.aircraft_id, p.ts ASC
-        """, (buffer_start, end_dt))
+        """, pos_params)
         all_positions = cur.fetchall()
 
-        cur.execute("""
+        cur.execute(f"""
             SELECT e.ts, e.type, e.meta, a.tail_number, a.icao24
             FROM events e
             JOIN aircraft a ON a.id = e.aircraft_id
-            WHERE e.ts >= %s AND e.ts <= %s
+            WHERE e.ts >= %s AND e.ts <= %s{icao_filter}
             ORDER BY e.ts ASC
-        """, (buffer_start, end_dt))
+        """, evt_params)
         all_events = cur.fetchall()
 
     steps = []

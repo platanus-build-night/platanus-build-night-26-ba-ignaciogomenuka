@@ -535,9 +535,10 @@ def replay_range():
         return jsonify({"error": "invalid date format"}), 400
     if (end_dt - start_dt).total_seconds() > 86400:
         return jsonify({"error": "range exceeds 24 hours"}), 400
+    aircraft_icao24 = request.args.get('aircraft_icao24') or None
     try:
         with get_db() as conn:
-            return jsonify(get_replay_range(conn, start_dt, end_dt, step_s))
+            return jsonify(get_replay_range(conn, start_dt, end_dt, step_s, aircraft_icao24))
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
