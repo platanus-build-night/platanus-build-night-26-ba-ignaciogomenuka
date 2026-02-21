@@ -162,10 +162,10 @@ function MonthlyChart({ series }: { series: MonthlySeries[] }) {
     <div className="flex items-center justify-center h-20 text-xs text-gray-600">No data for selected range</div>
   );
   const max = Math.max(...series.map(s => s.flights), 1);
-  const W = 500, H = 72, labelH = 14;
+  const W = 500, H = 72, labelH = 14, valueH = 12;
   const bw = W / series.length;
   return (
-    <svg viewBox={`0 0 ${W} ${H + labelH}`} className="w-full" preserveAspectRatio="none">
+    <svg viewBox={`0 0 ${W} ${H + labelH + valueH}`} className="w-full" preserveAspectRatio="none">
       {series.map((s, i) => {
         const barH = Math.max(2, (s.flights / max) * H);
         const mo = new Date(s.month + '-02').toLocaleString('default', { month: 'short' });
@@ -173,6 +173,10 @@ function MonthlyChart({ series }: { series: MonthlySeries[] }) {
           <g key={s.month}>
             <rect x={i * bw + 1} y={H - barH} width={bw - 2} height={barH}
               fill="#3b82f6" opacity={0.8} rx={1} />
+            {/* value label above bar */}
+            <text x={i * bw + bw / 2} y={H - barH - 2}
+              textAnchor="middle" fontSize={8} fill="#93c5fd">{s.flights}</text>
+            {/* month label below bar */}
             <text x={i * bw + bw / 2} y={H + labelH - 1}
               textAnchor="middle" fontSize={9} fill="#6b7280">{mo}</text>
           </g>

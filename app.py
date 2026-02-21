@@ -544,11 +544,22 @@ def replay_range():
 
 
 def _parse_analytics_params():
-    def dt(s):
-        return datetime.fromisoformat(s.replace('Z', '+00:00')) if s else None
+    def dt(s, end_of_day=False):
+        if not s:
+            return None
+        # Ensure timezone-aware
+        if 'T' in s or 'Z' in s:
+            d = datetime.fromisoformat(s.replace('Z', '+00:00'))
+            return d if d.tzinfo else d.replace(tzinfo=timezone.utc)
+        # Date-only string (YYYY-MM-DD from <input type="date">)
+        d = datetime.fromisoformat(s).replace(tzinfo=timezone.utc)
+        if end_of_day:
+            # Make end_date inclusive of the full selected day
+            d = d + timedelta(days=1) - timedelta(microseconds=1)
+        return d
     return dict(
         start_date    = dt(request.args.get('start_date')),
-        end_date      = dt(request.args.get('end_date')),
+        end_date      = dt(request.args.get('end_date'), end_of_day=True),
         operator_name = request.args.get('operator_name'),
         watchlist_id  = request.args.get('watchlist_id'),
         aircraft_id   = request.args.get('aircraft_id'),
