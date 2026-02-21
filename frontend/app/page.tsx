@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import dynamic from 'next/dynamic';
 
 const FleetMap = dynamic(() => import('./components/FleetMap'), {
@@ -84,8 +84,8 @@ function relTime(iso: string) {
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
-function Skeleton({ className = '' }: { className?: string }) {
-  return <div className={`animate-pulse bg-gray-800 rounded ${className}`} />;
+function Skeleton({ className = '', style }: { className?: string; style?: React.CSSProperties }) {
+  return <div className={`animate-pulse bg-gray-800 rounded ${className}`} style={style} />;
 }
 
 function ErrorBanner({ msg, onDismiss }: { msg: string; onDismiss: () => void }) {
