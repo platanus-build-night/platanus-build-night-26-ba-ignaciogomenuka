@@ -313,6 +313,8 @@ export default function Dashboard() {
     return () => clearInterval(id);
   }, [isPlaying, replayMode, playSpeed, replaySteps.length]);
 
+  const [lastFlightMeta, setLastFlightMeta] = useState<{ origin: string; destination: string; destination_name: string; duration_min: number; distance_km: number } | null>(null);
+
   async function fetchLastFlight() {
     setReplayLoading(true);
     try {
@@ -327,7 +329,14 @@ export default function Dashboard() {
       if (!data.steps?.length) throw new Error('No track data returned');
       setReplaySteps(data.steps);
       setReplayIdx(0);
-      setReplayAircraft(data.icao24);   // auto-select for trail
+      setReplayAircraft(data.icao24);
+      setLastFlightMeta({
+        origin:           data.origin,
+        destination:      data.destination,
+        destination_name: data.destination_name,
+        duration_min:     data.duration_min,
+        distance_km:      data.distance_km,
+      });
       setReplayMode(true);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Last flight fetch failed');
@@ -340,6 +349,7 @@ export default function Dashboard() {
     if (replayMode) {
       setReplayMode(false);
       setIsPlaying(false);
+      setLastFlightMeta(null);
       return;
     }
     const start  = new Date(replayStart);
@@ -512,6 +522,12 @@ export default function Dashboard() {
           {replayAircraft && (
             <span className="text-indigo-300 bg-indigo-900/60 px-1.5 py-0.5 rounded shrink-0">
               {PLANES.find(p => p.icao24 === replayAircraft)?.tail ?? replayAircraft}
+            </span>
+          )}
+          {lastFlightMeta && (
+            <span className="text-indigo-400 text-[10px] shrink-0">
+              {lastFlightMeta.origin} → {lastFlightMeta.destination}
+              <span className="text-indigo-600 ml-1">({lastFlightMeta.distance_km} km · {lastFlightMeta.duration_min}m)</span>
             </span>
           )}
           <button

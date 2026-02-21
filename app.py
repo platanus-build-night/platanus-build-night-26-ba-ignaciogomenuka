@@ -15,9 +15,7 @@ from airports import nearest_airport
 
 load_dotenv()
 
-ARGENTINA_TZ  = timezone(timedelta(hours=-3))
-OPENSKY_USER  = os.getenv('OPENSKY_USER')
-OPENSKY_PASS  = os.getenv('OPENSKY_PASS')
+ARGENTINA_TZ = timezone(timedelta(hours=-3))
 
 app = Flask(__name__)
 
@@ -545,53 +543,149 @@ def replay_range():
         return jsonify({"error": str(e)}), 500
 
 
+def _gc_points(lat1, lon1, lat2, lon2, n=80):
+    """Great-circle waypoints between two airport coordinates."""
+    import math
+    φ1, λ1 = math.radians(lat1), math.radians(lon1)
+    φ2, λ2 = math.radians(lat2), math.radians(lon2)
+    d = 2 * math.asin(math.sqrt(
+        math.sin((φ2 - φ1) / 2) ** 2 +
+        math.cos(φ1) * math.cos(φ2) * math.sin((λ2 - λ1) / 2) ** 2
+    ))
+    if d < 1e-9:
+        return [(lat1, lon1)] * n
+    pts = []
+    for i in range(n):
+        f = i / (n - 1)
+        A = math.sin((1 - f) * d) / math.sin(d)
+        B = math.sin(f * d) / math.sin(d)
+        x = A * math.cos(φ1) * math.cos(λ1) + B * math.cos(φ2) * math.cos(λ2)
+        y = A * math.cos(φ1) * math.sin(λ1) + B * math.cos(φ2) * math.sin(λ2)
+        z = A * math.sin(φ1) + B * math.sin(φ2)
+        pts.append((
+            math.degrees(math.atan2(z, math.sqrt(x ** 2 + y ** 2))),
+            math.degrees(math.atan2(y, x)),
+        ))
+    return pts
+
+
+def _bearing(lat1, lon1, lat2, lon2):
+    import math
+    φ1, φ2 = math.radians(lat1), math.radians(lat2)
+    dλ = math.radians(lon2 - lon1)
+    x = math.sin(dλ) * math.cos(φ2)
+    y = math.cos(φ1) * math.sin(φ2) - math.sin(φ1) * math.cos(φ2) * math.cos(dλ)
+    return (math.degrees(math.atan2(x, y)) + 360) % 360
+
+
+def _alt_profile(n, cruise_ft):
+    """Smooth climb → cruise → descend profile."""
+    alts = []
+    for i in range(n):
+        f = i / (n - 1)
+        if f < 0.2:
+            alts.append(cruise_ft * (f / 0.2))
+        elif f > 0.8:
+            alts.append(cruise_ft * ((1 - f) / 0.2))
+        else:
+            alts.append(cruise_ft)
+    return [max(300, a) for a in alts]
+
+
 @app.route('/replay/flight')
 def replay_flight():
+    from airports import AIRPORTS, haversine
     icao24 = request.args.get('icao24')
     try:
         with get_db() as conn:
             with conn.cursor() as cur:
+                # Find last TAKEOFF + matching LANDING within 12 hours
                 q = """
-                    SELECT e.ts, a.icao24, a.tail_number
-                    FROM events e
-                    JOIN aircraft a ON a.id = e.aircraft_id
-                    WHERE e.type = 'TAKEOFF'
-                      AND e.ts >= NOW() - INTERVAL '30 days'
+                    SELECT
+                        t.ts         AS takeoff_ts,
+                        l.ts         AS landing_ts,
+                        a.icao24,
+                        a.tail_number,
+                        (t.meta->>'altitude')::float  AS cruise_alt_m,
+                        (t.meta->>'velocity')::float  AS velocity_kmh
+                    FROM events t
+                    JOIN aircraft a ON a.id = t.aircraft_id
+                    LEFT JOIN LATERAL (
+                        SELECT l2.ts FROM events l2
+                        WHERE l2.aircraft_id = t.aircraft_id
+                          AND l2.type = 'LANDING'
+                          AND l2.ts > t.ts
+                          AND l2.ts < t.ts + INTERVAL '12 hours'
+                        ORDER BY l2.ts ASC LIMIT 1
+                    ) l ON true
+                    WHERE t.type = 'TAKEOFF'
+                      AND (t.meta->>'velocity')::float > 100
                 """
                 params = []
                 if icao24:
                     q += " AND a.icao24 = %s"
                     params.append(icao24)
-                q += " ORDER BY e.ts DESC LIMIT 1"
+                q += " ORDER BY t.ts DESC LIMIT 1"
                 cur.execute(q, params)
                 ev = cur.fetchone()
 
         if not ev:
-            return jsonify({"error": "No flights found in the last 30 days"}), 404
+            return jsonify({"error": "No suitable flight found"}), 404
 
-        # Fetch real GPS track from OpenSky — pass a timestamp 30 min into the flight
-        unix_time = int(ev['ts'].timestamp()) + 1800
-        url  = f"https://opensky-network.org/api/tracks/all?icao24={ev['icao24']}&time={unix_time}"
-        auth = (OPENSKY_USER, OPENSKY_PASS) if OPENSKY_USER and OPENSKY_PASS else None
-        resp = requests.get(url, auth=auth, timeout=15)
+        takeoff_ts   = ev['takeoff_ts']
+        landing_ts   = ev['landing_ts']
+        tail         = ev['tail_number']
+        icao_str     = ev['icao24']
+        velocity_kmh = float(ev['velocity_kmh'] or 600)
+        raw_alt      = float(ev['cruise_alt_m'] or 10000)
+        # ADSB.one stores altitude in feet; OpenSky stores in metres.
+        # Heuristic: values > 5000 are already feet (no jet cruises at 5000m).
+        cruise_ft    = raw_alt if raw_alt > 5000 else raw_alt * 3.28084
 
-        if not resp.ok:
-            return jsonify({"error": f"OpenSky returned {resp.status_code}"}), 502
+        # Duration and approximate distance
+        if landing_ts:
+            duration_s = (landing_ts - takeoff_ts).total_seconds()
+        else:
+            duration_s = 3600  # fallback: 1h
+        dist_km = velocity_kmh * (duration_s / 3600)
 
-        data = resp.json()
-        path = data.get('path') or []
-        if not path:
-            return jsonify({"error": "OpenSky returned no track waypoints for this flight"}), 404
+        # Origin: Buenos Aires Aeroparque (home base for all 5 planes)
+        ORIGIN_LAT, ORIGIN_LON = -34.5592, -58.4156  # SABE
 
-        tail    = ev['tail_number']
-        icao_str = ev['icao24']
+        # Find closest airport matching the flight distance (±30% tolerance)
+        best_apt, best_diff = None, float('inf')
+        for icao, iata, name, alat, alon in AIRPORTS:
+            d = haversine(ORIGIN_LAT, ORIGIN_LON, alat, alon)
+            if d < 20:      # skip Buenos Aires airports as destination
+                continue
+            diff = abs(d - dist_km)
+            if diff < best_diff and diff < dist_km * 0.35:
+                best_diff = diff
+                best_apt  = (alat, alon, iata, name)
+
+        if not best_apt:
+            # fallback: pick airport closest to the calculated distance regardless of tolerance
+            best_apt = min(
+                [(alat, alon, iata, name) for _, iata, name, alat, alon in AIRPORTS
+                 if haversine(ORIGIN_LAT, ORIGIN_LON, alat, alon) > 20],
+                key=lambda a: abs(haversine(ORIGIN_LAT, ORIGIN_LON, a[0], a[1]) - dist_km)
+            )
+
+        dest_lat, dest_lon, dest_iata, dest_name = best_apt
+
+        N     = min(max(int(duration_s / 30), 40), 120)   # ~1 step per 30s, 40-120 steps
+        pts   = _gc_points(ORIGIN_LAT, ORIGIN_LON, dest_lat, dest_lon, N)
+        alts  = _alt_profile(N, cruise_ft)
+        dt    = duration_s / (N - 1)
 
         steps = []
-        for wp in path:
-            # OpenSky path format: [unix_time, lat, lon, baro_alt_m, true_track_deg, on_ground]
-            ts_unix, lat, lon, baro_m, heading, on_ground = wp
-            ts_iso  = datetime.fromtimestamp(ts_unix, tz=timezone.utc).isoformat()
-            alt_ft  = round(baro_m * 3.28084) if baro_m is not None else None
+        for i, (lat, lon) in enumerate(pts):
+            ts     = takeoff_ts + timedelta(seconds=i * dt)
+            ts_iso = ts.isoformat()
+            # Heading from this point to next
+            nxt = pts[i + 1] if i + 1 < N else pts[-1]
+            hdg = _bearing(lat, lon, nxt[0], nxt[1])
+            on_ground = (i == 0) or (i == N - 1)
             steps.append({
                 "ts": ts_iso,
                 "fleet_kpis": {"in_air": 1, "on_ground": 4, "seen_last_15m": 1, "events_last_hour": 0},
@@ -599,18 +693,27 @@ def replay_flight():
                     "tail_number": tail,
                     "icao24":      icao_str,
                     "ts":          ts_iso,
-                    "lat":         lat,
-                    "lon":         lon,
-                    "altitude":    alt_ft,
-                    "velocity":    None,
-                    "heading":     heading,
-                    "on_ground":   bool(on_ground),
-                    "source":      "opensky-history",
+                    "lat":         round(lat, 6),
+                    "lon":         round(lon, 6),
+                    "altitude":    round(alts[i]),
+                    "velocity":    round(velocity_kmh),
+                    "heading":     round(hdg, 1),
+                    "on_ground":   on_ground,
+                    "source":      "synthesized",
                 }],
                 "last_50_events": [],
             })
 
-        return jsonify({"tail_number": tail, "icao24": icao_str, "steps": steps})
+        return jsonify({
+            "tail_number":   tail,
+            "icao24":        icao_str,
+            "origin":        "SABE",
+            "destination":   dest_iata,
+            "destination_name": dest_name,
+            "duration_min":  round(duration_s / 60, 1),
+            "distance_km":   round(dist_km),
+            "steps":         steps,
+        })
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
