@@ -13,7 +13,7 @@ const FleetMap = dynamic(() => import('./components/FleetMap'), {
 interface Position {
   tail_number: string;
   icao24: string;
-  ts: string;
+  ts: string | null;
   lat: number | null;
   lon: number | null;
   altitude: number | null;
@@ -101,7 +101,8 @@ function eventBadge(type: string) {
   return EVENT_STYLES[type.toUpperCase()] ?? 'bg-gray-800 text-gray-400';
 }
 
-function relTime(iso: string) {
+function relTime(iso: string | null) {
+  if (!iso) return '—';
   const diff = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
   if (diff < 60)   return `${diff}s ago`;
   if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
@@ -209,6 +210,13 @@ export default function Dashboard() {
   const [replayAircraft, setReplayAircraft] = useState('');
   const [activeTab, setActiveTab]           = useState<'fleet' | 'analytics'>('fleet');
 
+  // Replay date range (datetime-local format: YYYY-MM-DDTHH:MM)
+  const [replayStart, setReplayStart] = useState(() => {
+    const d = new Date(Date.now() - 2 * 3600 * 1000);
+    return d.toISOString().slice(0, 16);
+  });
+  const [replayEnd, setReplayEnd] = useState(() => new Date().toISOString().slice(0, 16));
+
   // Monthly analytics state
   const today   = new Date().toISOString().slice(0, 10);
   const yearAgo = new Date(Date.now() - 365 * 86400_000).toISOString().slice(0, 10);
@@ -311,13 +319,15 @@ export default function Dashboard() {
       setIsPlaying(false);
       return;
     }
+    const start  = new Date(replayStart);
+    const end    = new Date(replayEnd);
+    const rangeH = (end.getTime() - start.getTime()) / 3_600_000;
+    const step   = rangeH < 2 ? 60 : rangeH < 12 ? 300 : rangeH < 48 ? 900 : 1800;
     setReplayLoading(true);
     try {
-      const end   = new Date();
-      const start = new Date(end.getTime() - 2 * 60 * 60 * 1000);
-      const p     = new URLSearchParams({ start: start.toISOString(), end: end.toISOString(), step_seconds: '60' });
+      const p = new URLSearchParams({ start: start.toISOString(), end: end.toISOString(), step_seconds: String(step) });
       if (replayAircraft) p.set('aircraft_icao24', replayAircraft);
-      const res   = await fetch(`/replay/range?${p}`);
+      const res = await fetch(`/replay/range?${p}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const steps: ReplayStep[] = await res.json();
       setReplaySteps(steps);
@@ -422,6 +432,23 @@ export default function Dashboard() {
             <span className="text-gray-500">
               Data age: <span className={freshness > 60 ? 'text-yellow-400' : 'text-gray-400'}>{freshness}s</span>
             </span>
+          )}
+          {!replayMode && (
+            <div className="flex items-center gap-1 text-[10px]">
+              <input
+                type="datetime-local"
+                value={replayStart}
+                onChange={e => setReplayStart(e.target.value)}
+                className="bg-gray-800 text-gray-200 text-[10px] rounded px-1.5 py-1 outline-none focus:ring-1 focus:ring-indigo-700"
+              />
+              <span className="text-gray-600">→</span>
+              <input
+                type="datetime-local"
+                value={replayEnd}
+                onChange={e => setReplayEnd(e.target.value)}
+                className="bg-gray-800 text-gray-200 text-[10px] rounded px-1.5 py-1 outline-none focus:ring-1 focus:ring-indigo-700"
+              />
+            </div>
           )}
           <select
             value={replayAircraft}
@@ -721,7 +748,7 @@ export default function Dashboard() {
                 { label: 'Total Flights',   value: mkpi?.total_flights,   color: 'text-white' },
                 { label: 'Takeoffs',        value: mkpi?.takeoffs,        color: 'text-green-400' },
                 { label: 'Landings',        value: mkpi?.landings,        color: 'text-blue-400' },
-                { label: 'Active Aircraft', value: mkpi?.active_aircraft, color: 'text-purple-400' },
+                { label: 'W/ Flights',      value: mkpi?.active_aircraft, color: 'text-purple-400' },
               ] as const).map(({ label, value, color }) => (
                 <div key={label} className="bg-gray-800/60 rounded px-3 py-2 flex items-center gap-3">
                   {mLoading

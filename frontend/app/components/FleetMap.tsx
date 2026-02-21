@@ -7,7 +7,7 @@ import 'leaflet/dist/leaflet.css';
 interface Position {
   tail_number: string;
   icao24: string;
-  ts: string;
+  ts: string | null;
   lat: number | null;
   lon: number | null;
   altitude: number | null;

@@ -5,27 +5,28 @@ from datetime import timedelta
 def get_snapshot(conn):
     with conn.cursor() as cur:
 
-        # Latest position per aircraft (DISTINCT ON is index-friendly)
+        # All aircraft, with their latest position if available (LEFT JOIN)
         cur.execute("""
-            SELECT DISTINCT ON (p.aircraft_id)
-                p.aircraft_id, p.ts, p.lat, p.lon,
-                p.altitude, p.velocity, p.heading, p.on_ground, p.source,
-                a.tail_number, a.icao24
-            FROM positions p
-            JOIN aircraft a ON a.id = p.aircraft_id
-            ORDER BY p.aircraft_id, p.ts DESC
+            SELECT DISTINCT ON (a.id)
+                a.id AS aircraft_id, p.ts, p.lat, p.lon,
+                p.altitude, p.velocity, p.heading,
+                COALESCE(p.on_ground, true) AS on_ground,
+                p.source, a.tail_number, a.icao24
+            FROM aircraft a
+            LEFT JOIN positions p ON p.aircraft_id = a.id
+            ORDER BY a.id, p.ts DESC NULLS LAST
         """)
         latest_positions = [
             {
                 "tail_number": r["tail_number"],
                 "icao24": r["icao24"],
-                "ts": r["ts"].isoformat(),
+                "ts": r["ts"].isoformat() if r["ts"] else None,
                 "lat": r["lat"],
                 "lon": r["lon"],
                 "altitude": r["altitude"],
                 "velocity": r["velocity"],
                 "heading": r["heading"],
-                "on_ground": r["on_ground"],
+                "on_ground": bool(r["on_ground"]),
                 "source": r["source"],
             }
             for r in cur.fetchall()
