@@ -10,6 +10,7 @@ from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
 from db import get_snapshot, has_recent_event, get_last_seen_from_db, get_snapshot_at, get_replay_range
 from forecast import get_forecast
+from analytics import get_monthly_analytics
 
 load_dotenv()
 
@@ -520,6 +521,26 @@ def replay_range():
     try:
         with get_db() as conn:
             return jsonify(get_replay_range(conn, start_dt, end_dt, step_s))
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/analytics/monthly')
+def analytics_monthly():
+    def parse_dt(s):
+        if not s:
+            return None
+        return datetime.fromisoformat(s.replace('Z', '+00:00'))
+    try:
+        with get_db() as conn:
+            return jsonify(get_monthly_analytics(
+                conn,
+                start_date    = parse_dt(request.args.get('start_date')),
+                end_date      = parse_dt(request.args.get('end_date')),
+                operator_name = request.args.get('operator_name'),
+                watchlist_id  = request.args.get('watchlist_id'),
+                aircraft_id   = request.args.get('aircraft_id'),
+            ))
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
