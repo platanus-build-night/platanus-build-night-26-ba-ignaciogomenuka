@@ -1,27 +1,25 @@
 from datetime import datetime, timezone, timedelta
 
 
+def _defaults(start_date, end_date):
+    now = datetime.now(tz=timezone.utc)
+    return start_date or now - timedelta(days=365), end_date or now
+
+
+def _filters(start_date, end_date, operator_name, watchlist_id, aircraft_id):
+    f = {"start_date": start_date.isoformat(), "end_date": end_date.isoformat()}
+    if operator_name: f["operator_name"] = operator_name
+    if watchlist_id:  f["watchlist_id"]  = watchlist_id
+    if aircraft_id:   f["aircraft_id"]   = aircraft_id
+    return f
+
+
 def get_monthly_analytics(conn, start_date=None, end_date=None,
                           operator_name=None, watchlist_id=None, aircraft_id=None):
-    now = datetime.now(tz=timezone.utc)
-    if end_date is None:
-        end_date = now
-    if start_date is None:
-        start_date = now - timedelta(days=365)
+    start_date, end_date = _defaults(start_date, end_date)
+    filters_applied      = _filters(start_date, end_date, operator_name, watchlist_id, aircraft_id)
 
-    filters_applied = {
-        "start_date": start_date.isoformat(),
-        "end_date":   end_date.isoformat(),
-    }
-    if operator_name:
-        filters_applied["operator_name"] = operator_name
-    if watchlist_id:
-        filters_applied["watchlist_id"] = watchlist_id
-    if aircraft_id:
-        filters_applied["aircraft_id"] = aircraft_id
-
-    # Build optional WHERE clause — only aircraft_id maps to current schema
-    extra = " AND e.aircraft_id = %s" if aircraft_id else ""
+    extra       = " AND e.aircraft_id = %s" if aircraft_id else ""
     base_params = [start_date, end_date] + ([aircraft_id] if aircraft_id else [])
 
     with conn.cursor() as cur:
@@ -70,4 +68,43 @@ def get_monthly_analytics(conn, start_date=None, end_date=None,
             "active_aircraft": int(active_row["active_aircraft"] or 0),
         },
         "monthly_series": monthly_series,
+    }
+
+
+def get_top_destinations(conn, start_date=None, end_date=None,
+                         operator_name=None, watchlist_id=None, aircraft_id=None):
+    start_date, end_date = _defaults(start_date, end_date)
+    filters_applied      = _filters(start_date, end_date, operator_name, watchlist_id, aircraft_id)
+
+    extra       = " AND e.aircraft_id = %s" if aircraft_id else ""
+    base_params = [start_date, end_date] + ([aircraft_id] if aircraft_id else [])
+
+    with conn.cursor() as cur:
+        cur.execute(f"""
+            SELECT
+                e.meta->>'destination_airport' AS airport,
+                e.meta->>'destination_name'    AS name,
+                COUNT(*)                        AS count
+            FROM events e
+            WHERE e.ts >= %s AND e.ts <= %s
+              AND e.type = 'LANDING'
+              AND e.meta->>'destination_airport' IS NOT NULL
+              AND e.meta->>'destination_airport' <> 'UNKNOWN'
+              {extra}
+            GROUP BY 1, 2
+            ORDER BY 3 DESC
+            LIMIT 20
+        """, base_params)
+        rows = cur.fetchall()
+
+    return {
+        "filters_applied":  filters_applied,
+        "top_destinations": [
+            {
+                "airport": r["airport"],
+                "name":    r["name"] or r["airport"],
+                "count":   int(r["count"]),
+            }
+            for r in rows
+        ],
     }

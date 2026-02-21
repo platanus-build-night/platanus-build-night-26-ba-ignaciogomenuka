@@ -10,7 +10,8 @@ from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
 from db import get_snapshot, has_recent_event, get_last_seen_from_db, get_snapshot_at, get_replay_range
 from forecast import get_forecast
-from analytics import get_monthly_analytics
+from analytics import get_monthly_analytics, get_top_destinations
+from airports import nearest_airport
 
 load_dotenv()
 
@@ -78,10 +79,26 @@ def save_flight_event(icao24, event_type, data=None):
                 if has_recent_event(conn, aircraft_id, event_type.upper()):
                     print(f"  Dedup: skipping {event_type.upper()} for {icao24}")
                     return
+                meta = dict(data or {})
+                if event_type.upper() == "LANDING":
+                    cur.execute("""
+                        SELECT lat, lon FROM positions
+                        WHERE aircraft_id = %s AND lat IS NOT NULL
+                          AND ts >= NOW() - INTERVAL '5 minutes'
+                        ORDER BY ts DESC LIMIT 1
+                    """, (aircraft_id,))
+                    pos = cur.fetchone()
+                    if pos:
+                        apt = nearest_airport(pos["lat"], pos["lon"])
+                        meta["destination_airport"] = apt["iata"] if apt else "UNKNOWN"
+                        if apt:
+                            meta["destination_name"] = apt["name"]
+                    else:
+                        meta["destination_airport"] = "UNKNOWN"
                 cur.execute("""
                     INSERT INTO events (aircraft_id, type, meta)
                     VALUES (%s, %s, %s)
-                """, (aircraft_id, event_type.upper(), json.dumps(data or {})))
+                """, (aircraft_id, event_type.upper(), json.dumps(meta)))
     except Exception as e:
         print(f"Error saving event: {e}")
 
@@ -525,22 +542,32 @@ def replay_range():
         return jsonify({"error": str(e)}), 500
 
 
+def _parse_analytics_params():
+    def dt(s):
+        return datetime.fromisoformat(s.replace('Z', '+00:00')) if s else None
+    return dict(
+        start_date    = dt(request.args.get('start_date')),
+        end_date      = dt(request.args.get('end_date')),
+        operator_name = request.args.get('operator_name'),
+        watchlist_id  = request.args.get('watchlist_id'),
+        aircraft_id   = request.args.get('aircraft_id'),
+    )
+
+
 @app.route('/analytics/monthly')
 def analytics_monthly():
-    def parse_dt(s):
-        if not s:
-            return None
-        return datetime.fromisoformat(s.replace('Z', '+00:00'))
     try:
         with get_db() as conn:
-            return jsonify(get_monthly_analytics(
-                conn,
-                start_date    = parse_dt(request.args.get('start_date')),
-                end_date      = parse_dt(request.args.get('end_date')),
-                operator_name = request.args.get('operator_name'),
-                watchlist_id  = request.args.get('watchlist_id'),
-                aircraft_id   = request.args.get('aircraft_id'),
-            ))
+            return jsonify(get_monthly_analytics(conn, **_parse_analytics_params()))
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/analytics/top-destinations')
+def analytics_top_destinations():
+    try:
+        with get_db() as conn:
+            return jsonify(get_top_destinations(conn, **_parse_analytics_params()))
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
