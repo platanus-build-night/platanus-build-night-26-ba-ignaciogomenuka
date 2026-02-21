@@ -1,4 +1,4 @@
-from flask import Flask, jsonify, render_template_string
+from flask import Flask, jsonify, render_template_string, request
 import requests
 import os
 import threading
@@ -8,7 +8,7 @@ import psycopg2
 import psycopg2.extras
 from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
-from db import get_snapshot, has_recent_event, get_last_seen_from_db
+from db import get_snapshot, has_recent_event, get_last_seen_from_db, get_snapshot_at, get_replay_range
 from forecast import get_forecast
 
 load_dotenv()
@@ -483,6 +483,43 @@ def forecast_24h():
     try:
         with get_db() as conn:
             return jsonify(get_forecast(conn))
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/replay/snapshot')
+def replay_snapshot():
+    ts_str = request.args.get('ts')
+    if not ts_str:
+        return jsonify({"error": "ts required"}), 400
+    try:
+        ts = datetime.fromisoformat(ts_str.replace('Z', '+00:00'))
+    except ValueError:
+        return jsonify({"error": "invalid ts"}), 400
+    try:
+        with get_db() as conn:
+            return jsonify(get_snapshot_at(conn, ts))
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/replay/range')
+def replay_range():
+    start_str = request.args.get('start')
+    end_str   = request.args.get('end')
+    step_s    = max(30, min(int(request.args.get('step_seconds', 60)), 3600))
+    if not start_str or not end_str:
+        return jsonify({"error": "start and end required"}), 400
+    try:
+        start_dt = datetime.fromisoformat(start_str.replace('Z', '+00:00'))
+        end_dt   = datetime.fromisoformat(end_str.replace('Z', '+00:00'))
+    except ValueError:
+        return jsonify({"error": "invalid date format"}), 400
+    if (end_dt - start_dt).total_seconds() > 86400:
+        return jsonify({"error": "range exceeds 24 hours"}), 400
+    try:
+        with get_db() as conn:
+            return jsonify(get_replay_range(conn, start_dt, end_dt, step_s))
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 

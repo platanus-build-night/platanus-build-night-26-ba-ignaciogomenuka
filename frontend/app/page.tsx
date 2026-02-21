@@ -57,6 +57,13 @@ interface Forecast {
   hourly_series: HourlyEntry[];
 }
 
+interface ReplayStep {
+  ts: string;
+  fleet_kpis: FleetKpis;
+  latest_positions: Position[];
+  last_50_events: FleetEvent[];
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function eventKey(ev: FleetEvent) {
@@ -126,15 +133,23 @@ function BarChart({ series }: { series: HourlyEntry[] }) {
 // ─── Dashboard ────────────────────────────────────────────────────────────────
 
 export default function Dashboard() {
-  const [snapshot, setSnapshot]     = useState<Snapshot | null>(null);
-  const [forecast, setForecast]     = useState<Forecast | null>(null);
-  const [freshness, setFreshness]   = useState(0);
-  const [isLoading, setIsLoading]   = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
-  const [error, setError]           = useState<string | null>(null);
-  const [search, setSearch]         = useState('');
-  const [statusFilter, setStatus]   = useState<'all' | 'in_air' | 'on_ground'>('all');
-  const [newKeys, setNewKeys]       = useState<Set<string>>(new Set());
+  const [snapshot, setSnapshot]       = useState<Snapshot | null>(null);
+  const [forecast, setForecast]       = useState<Forecast | null>(null);
+  const [freshness, setFreshness]     = useState(0);
+  const [isLoading, setIsLoading]     = useState(true);
+  const [refreshing, setRefreshing]   = useState(false);
+  const [error, setError]             = useState<string | null>(null);
+  const [search, setSearch]           = useState('');
+  const [statusFilter, setStatus]     = useState<'all' | 'in_air' | 'on_ground'>('all');
+  const [newKeys, setNewKeys]         = useState<Set<string>>(new Set());
+
+  // Replay state
+  const [replayMode, setReplayMode]     = useState(false);
+  const [replaySteps, setReplaySteps]   = useState<ReplayStep[]>([]);
+  const [replayIdx, setReplayIdx]       = useState(0);
+  const [isPlaying, setIsPlaying]       = useState(false);
+  const [playSpeed, setPlaySpeed]       = useState<1 | 4>(1);
+  const [replayLoading, setReplayLoading] = useState(false);
 
   // Track which event keys have already been shown — don't highlight on first load
   const seenKeys    = useRef<Set<string>>(new Set());
@@ -193,10 +208,11 @@ export default function Dashboard() {
   }, []);
 
   useEffect(() => {
+    if (replayMode) return;
     fetchSnapshot();
     const id = setInterval(fetchSnapshot, 5000);
     return () => clearInterval(id);
-  }, [fetchSnapshot]);
+  }, [fetchSnapshot, replayMode]);
 
   useEffect(() => {
     fetchForecast();
@@ -210,9 +226,45 @@ export default function Dashboard() {
     return () => clearInterval(id);
   }, []);
 
-  const kpis = snapshot?.fleet_kpis;
+  // Replay: advance index when playing
+  useEffect(() => {
+    if (!isPlaying || !replayMode) return;
+    const id = setInterval(() => {
+      setReplayIdx(i => {
+        if (i >= replaySteps.length - 1) { setIsPlaying(false); return i; }
+        return i + 1;
+      });
+    }, playSpeed === 4 ? 250 : 1000);
+    return () => clearInterval(id);
+  }, [isPlaying, replayMode, playSpeed, replaySteps.length]);
 
-  const filteredPositions = (snapshot?.latest_positions ?? []).filter(p => {
+  async function toggleReplay() {
+    if (replayMode) {
+      setReplayMode(false);
+      setIsPlaying(false);
+      return;
+    }
+    setReplayLoading(true);
+    try {
+      const end   = new Date();
+      const start = new Date(end.getTime() - 2 * 60 * 60 * 1000);
+      const res   = await fetch(`/replay/range?start=${start.toISOString()}&end=${end.toISOString()}&step_seconds=60`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const steps: ReplayStep[] = await res.json();
+      setReplaySteps(steps);
+      setReplayIdx(0);
+      setReplayMode(true);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Replay failed');
+    } finally {
+      setReplayLoading(false);
+    }
+  }
+
+  const displaySnap = replayMode && replaySteps.length > 0 ? replaySteps[replayIdx] : snapshot;
+  const kpis = displaySnap?.fleet_kpis;
+
+  const filteredPositions = (displaySnap?.latest_positions ?? []).filter(p => {
     const q = search.toLowerCase();
     const matchSearch = !q || p.tail_number.toLowerCase().includes(q) || p.icao24.toLowerCase().includes(q);
     const matchStatus =
@@ -254,11 +306,54 @@ export default function Dashboard() {
           )}
         </div>
         <div className="flex items-center gap-3 text-[11px]">
-          <span className="text-gray-500">
-            Data age: <span className={freshness > 60 ? 'text-yellow-400' : 'text-gray-400'}>{freshness}s</span>
-          </span>
+          {!replayMode && (
+            <span className="text-gray-500">
+              Data age: <span className={freshness > 60 ? 'text-yellow-400' : 'text-gray-400'}>{freshness}s</span>
+            </span>
+          )}
+          <button
+            onClick={toggleReplay}
+            disabled={replayLoading}
+            className={`px-2 py-1 rounded text-[11px] font-medium transition-colors ${
+              replayMode
+                ? 'bg-indigo-600 hover:bg-indigo-500 text-white'
+                : 'bg-gray-800 hover:bg-gray-700 text-gray-300'
+            }`}
+          >
+            {replayLoading ? '⏳' : replayMode ? '📡 Live' : '⏪ Replay'}
+          </button>
         </div>
       </header>
+
+      {/* ── Replay controls bar ── */}
+      {replayMode && (
+        <div className="flex items-center gap-2 px-4 py-1.5 bg-indigo-950/80 border-b border-indigo-800 shrink-0 text-[11px]">
+          <span className="text-indigo-400 font-bold shrink-0">REPLAY</span>
+          <button
+            onClick={() => setIsPlaying(p => !p)}
+            className="px-2 py-0.5 rounded bg-indigo-800 hover:bg-indigo-700 text-white transition-colors"
+          >
+            {isPlaying ? '⏸' : '▶'}
+          </button>
+          <button
+            onClick={() => setPlaySpeed(s => s === 1 ? 4 : 1)}
+            className="px-2 py-0.5 rounded bg-indigo-900 hover:bg-indigo-800 text-indigo-300 transition-colors"
+          >
+            {playSpeed}x
+          </button>
+          <input
+            type="range"
+            min={0}
+            max={Math.max(0, replaySteps.length - 1)}
+            value={replayIdx}
+            onChange={e => { setIsPlaying(false); setReplayIdx(+e.target.value); }}
+            className="flex-1 accent-indigo-400"
+          />
+          <span className="text-indigo-300 whitespace-nowrap shrink-0 font-mono">
+            {replaySteps[replayIdx] ? new Date(replaySteps[replayIdx].ts).toLocaleTimeString() : '—'}
+          </span>
+        </div>
+      )}
 
       {/* ── Main row ── */}
       <div className="flex flex-1 min-h-0">
@@ -279,7 +374,7 @@ export default function Dashboard() {
             </div>
           ))}
 
-          {!isLoading && snapshot?.last_50_events.length === 0 && (
+          {!isLoading && displaySnap?.last_50_events.length === 0 && (
             <div className="flex flex-col items-center justify-center py-12 text-center px-4">
               <div className="text-2xl mb-2 opacity-30">📋</div>
               <p className="text-xs text-gray-600">No events yet.<br />Events appear as aircraft are tracked.</p>
@@ -287,7 +382,7 @@ export default function Dashboard() {
           )}
 
           <div className="divide-y divide-gray-800/50">
-            {snapshot?.last_50_events.map(ev => {
+            {displaySnap?.last_50_events.map(ev => {
               const k = eventKey(ev);
               const isNew = newKeys.has(k);
               return (
@@ -315,7 +410,7 @@ export default function Dashboard() {
 
         {/* Center: Map */}
         <div className="flex-1 relative">
-          <FleetMap positions={snapshot?.latest_positions ?? []} />
+          <FleetMap positions={displaySnap?.latest_positions ?? []} />
         </div>
 
         {/* Right: Forecast */}

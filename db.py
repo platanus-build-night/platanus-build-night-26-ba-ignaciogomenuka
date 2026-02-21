@@ -1,4 +1,5 @@
 import json
+from datetime import timedelta
 
 
 def get_snapshot(conn):
@@ -92,6 +93,148 @@ def has_recent_event(conn, aircraft_id, event_type):
             LIMIT 1
         """, (aircraft_id, event_type))
         return cur.fetchone() is not None
+
+
+def get_snapshot_at(conn, ts):
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT DISTINCT ON (p.aircraft_id)
+                p.aircraft_id, p.ts, p.lat, p.lon,
+                p.altitude, p.velocity, p.heading, p.on_ground, p.source,
+                a.tail_number, a.icao24
+            FROM positions p
+            JOIN aircraft a ON a.id = p.aircraft_id
+            WHERE p.ts <= %s
+            ORDER BY p.aircraft_id, p.ts DESC
+        """, (ts,))
+        latest_positions = [
+            {
+                "tail_number": r["tail_number"],
+                "icao24": r["icao24"],
+                "ts": r["ts"].isoformat(),
+                "lat": r["lat"],
+                "lon": r["lon"],
+                "altitude": r["altitude"],
+                "velocity": r["velocity"],
+                "heading": r["heading"],
+                "on_ground": r["on_ground"],
+                "source": r["source"],
+            }
+            for r in cur.fetchall()
+        ]
+        cur.execute("""
+            SELECT
+                (SELECT COUNT(DISTINCT aircraft_id) FROM positions
+                 WHERE ts > %s - INTERVAL '15 minutes' AND ts <= %s) AS seen_last_15m,
+                (SELECT COUNT(*) FROM events
+                 WHERE ts > %s - INTERVAL '1 hour' AND ts <= %s) AS events_last_hour
+        """, (ts, ts, ts, ts))
+        row = cur.fetchone()
+        seen_last_15m = int(row["seen_last_15m"] or 0)
+        cur.execute("""
+            SELECT e.ts, e.type, e.meta, a.tail_number, a.icao24
+            FROM events e
+            JOIN aircraft a ON a.id = e.aircraft_id
+            WHERE e.ts <= %s
+            ORDER BY e.ts DESC
+            LIMIT 20
+        """, (ts,))
+        last_events = [
+            {
+                "ts": r["ts"].isoformat(),
+                "type": r["type"],
+                "tail_number": r["tail_number"],
+                "icao24": r["icao24"],
+                "meta": r["meta"] if isinstance(r["meta"], dict) else json.loads(r["meta"] or "{}"),
+            }
+            for r in cur.fetchall()
+        ]
+    return {
+        "fleet_kpis": {
+            "in_air": seen_last_15m,
+            "on_ground": 5 - seen_last_15m,
+            "seen_last_15m": seen_last_15m,
+            "events_last_hour": int(row["events_last_hour"] or 0),
+        },
+        "latest_positions": latest_positions,
+        "last_50_events": last_events,
+        "data_freshness_seconds": 0,
+    }
+
+
+def get_replay_range(conn, start_dt, end_dt, step_seconds):
+    buffer_start = start_dt - timedelta(hours=1)
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT p.ts, p.aircraft_id, p.lat, p.lon, p.altitude, p.velocity,
+                   p.heading, p.on_ground, p.source, a.tail_number, a.icao24
+            FROM positions p
+            JOIN aircraft a ON a.id = p.aircraft_id
+            WHERE p.ts >= %s AND p.ts <= %s
+            ORDER BY p.aircraft_id, p.ts ASC
+        """, (buffer_start, end_dt))
+        all_positions = cur.fetchall()
+
+        cur.execute("""
+            SELECT e.ts, e.type, e.meta, a.tail_number, a.icao24
+            FROM events e
+            JOIN aircraft a ON a.id = e.aircraft_id
+            WHERE e.ts >= %s AND e.ts <= %s
+            ORDER BY e.ts ASC
+        """, (buffer_start, end_dt))
+        all_events = cur.fetchall()
+
+    steps = []
+    current = start_dt
+    while current <= end_dt:
+        seen = {}
+        for row in all_positions:
+            if row["ts"] <= current:
+                seen[row["aircraft_id"]] = row
+
+        cutoff_15m = current - timedelta(minutes=15)
+        cutoff_1h  = current - timedelta(hours=1)
+        seen_15m   = len({r["aircraft_id"] for r in all_positions if cutoff_15m <= r["ts"] <= current})
+        events_1h  = sum(1 for e in all_events if cutoff_1h <= e["ts"] <= current)
+
+        events_at = [
+            {
+                "ts": e["ts"].isoformat(),
+                "type": e["type"],
+                "tail_number": e["tail_number"],
+                "icao24": e["icao24"],
+                "meta": e["meta"] if isinstance(e["meta"], dict) else json.loads(e["meta"] or "{}"),
+            }
+            for e in all_events if e["ts"] <= current
+        ][-20:]
+
+        steps.append({
+            "ts": current.isoformat(),
+            "fleet_kpis": {
+                "in_air": seen_15m,
+                "on_ground": 5 - seen_15m,
+                "seen_last_15m": seen_15m,
+                "events_last_hour": events_1h,
+            },
+            "latest_positions": [
+                {
+                    "tail_number": r["tail_number"],
+                    "icao24": r["icao24"],
+                    "ts": r["ts"].isoformat(),
+                    "lat": r["lat"],
+                    "lon": r["lon"],
+                    "altitude": r["altitude"],
+                    "velocity": r["velocity"],
+                    "heading": r["heading"],
+                    "on_ground": r["on_ground"],
+                    "source": r["source"],
+                }
+                for r in seen.values()
+            ],
+            "last_50_events": list(reversed(events_at)),
+        })
+        current += timedelta(seconds=step_seconds)
+    return steps
 
 
 def get_last_seen_from_db(conn):
