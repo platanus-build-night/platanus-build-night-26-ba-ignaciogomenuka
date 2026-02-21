@@ -381,7 +381,7 @@ export default function Dashboard() {
   const mkpi = monthly?.kpis;
 
   return (
-    <div className="bg-gray-950 text-gray-100">
+    <div className="bg-gray-950 text-gray-100 overflow-y-auto">
     <div className="flex flex-col h-screen overflow-hidden">
 
       {/* ── Error banner ── */}
@@ -671,6 +671,13 @@ export default function Dashboard() {
           </table>
         </div>
       </div>
+    </div>
+
+    {/* ── Scroll hint ── */}
+    <div className="flex items-center justify-center gap-2 py-1.5 bg-gray-900 border-t border-gray-800 text-[10px] text-gray-600 select-none">
+      <span>▼</span>
+      <span>Monthly Activity · Top Destinations</span>
+      <span>▼</span>
     </div>
 
     {/* ── Monthly Activity + Top Destinations ── */}
