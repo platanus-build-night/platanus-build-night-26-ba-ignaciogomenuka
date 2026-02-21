@@ -4,6 +4,7 @@ and writes a .sql file ready to paste in Supabase SQL Editor.
 """
 
 import json
+import os
 import time
 import requests
 from datetime import datetime, timezone, timedelta
@@ -18,7 +19,7 @@ PLANES = {
 
 OPENSKY_URL       = "https://opensky-network.org/api/flights/aircraft"
 OPENSKY_TOKEN_URL = "https://auth.opensky-network.org/auth/realms/opensky-network/protocol/openid-connect/token"
-DELAY_BETWEEN_REQUESTS = 10
+DELAY_BETWEEN_REQUESTS = 15
 OUTPUT_FILE       = "import_history.sql"
 
 # Load credentials from credentials_opensky.json (never committed)
@@ -74,7 +75,7 @@ def fetch_flights(icao24, begin_ts, end_ts, token):
         except Exception as e:
             print(f"    {cursor.date()} — error: {e}")
         cursor += timedelta(days=1)
-        time.sleep(10)
+        time.sleep(15)
 
     return results
 
@@ -84,7 +85,6 @@ def escape(s):
 
 
 def main():
-    # OpenSky data available up to ~end of 2025. Use a fixed 2025 window.
     begin = datetime(2025, 10, 1, tzinfo=timezone.utc)
     now   = datetime(2025, 12, 31, tzinfo=timezone.utc)
 

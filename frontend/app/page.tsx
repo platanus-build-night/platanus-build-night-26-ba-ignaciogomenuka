@@ -77,6 +77,12 @@ interface MonthlyData {
   monthly_series: MonthlySeries[];
 }
 
+interface TopDest {
+  airport: string;
+  name: string;
+  count: number;
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function eventKey(ev: FleetEvent) {
@@ -200,9 +206,11 @@ export default function Dashboard() {
   // Monthly analytics state
   const today   = new Date().toISOString().slice(0, 10);
   const yearAgo = new Date(Date.now() - 365 * 86400_000).toISOString().slice(0, 10);
-  const [mFilters, setMFilters] = useState({ startDate: yearAgo, endDate: today, aircraft: '' });
-  const [monthly, setMonthly]   = useState<MonthlyData | null>(null);
-  const [mLoading, setMLoading] = useState(false);
+  const [mFilters, setMFilters]       = useState({ startDate: yearAgo, endDate: today, aircraft: '' });
+  const [monthly, setMonthly]         = useState<MonthlyData | null>(null);
+  const [mLoading, setMLoading]       = useState(false);
+  const [topDest, setTopDest]         = useState<TopDest[]>([]);
+  const [topDestLoading, setTopDestLoading] = useState(false);
 
   // Track which event keys have already been shown — don't highlight on first load
   const seenKeys    = useRef<Set<string>>(new Set());
@@ -327,6 +335,21 @@ export default function Dashboard() {
   }, []);
 
   useEffect(() => { fetchMonthly(mFilters); }, [fetchMonthly, mFilters]);
+
+  const fetchTopDest = useCallback(async (filters: typeof mFilters) => {
+    setTopDestLoading(true);
+    try {
+      const p = new URLSearchParams({ start_date: filters.startDate, end_date: filters.endDate });
+      if (filters.aircraft) p.set('aircraft_id', filters.aircraft);
+      const res = await fetch(`/analytics/top-destinations?${p}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      setTopDest(data.top_destinations ?? []);
+    } catch { /* silent */ }
+    finally { setTopDestLoading(false); }
+  }, []);
+
+  useEffect(() => { fetchTopDest(mFilters); }, [fetchTopDest, mFilters]);
 
   const displaySnap = replayMode && replaySteps.length > 0 ? replaySteps[replayIdx] : snapshot;
   const kpis = displaySnap?.fleet_kpis;
@@ -622,16 +645,15 @@ export default function Dashboard() {
       </div>
     </div>
 
-    {/* ── Monthly Activity ── */}
+    {/* ── Monthly Activity + Top Destinations ── */}
     <div className="border-t border-gray-800 bg-gray-900 px-5 py-4">
 
-      {/* Section header */}
+      {/* Section header + shared filters */}
       <div className="flex items-center justify-between mb-3">
-        <span className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider">Monthly Activity</span>
-        {mLoading && <span className="text-[10px] text-gray-600 animate-pulse">Loading…</span>}
+        <span className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider">Analytics</span>
+        {(mLoading || topDestLoading) && <span className="text-[10px] text-gray-600 animate-pulse">Loading…</span>}
       </div>
 
-      {/* Filters */}
       <div className="flex flex-wrap items-center gap-2 mb-4">
         <div className="flex items-center gap-1 text-[11px]">
           <label className="text-gray-500">From</label>
@@ -659,29 +681,105 @@ export default function Dashboard() {
         </select>
       </div>
 
-      {/* KPI cards */}
-      <div className="grid grid-cols-4 gap-2 mb-4">
-        {([
-          { label: 'Total Flights',    value: mkpi?.total_flights,    color: 'text-white' },
-          { label: 'Takeoffs',         value: mkpi?.takeoffs,         color: 'text-green-400' },
-          { label: 'Landings',         value: mkpi?.landings,         color: 'text-blue-400' },
-          { label: 'Active Aircraft',  value: mkpi?.active_aircraft,  color: 'text-purple-400' },
-        ] as const).map(({ label, value, color }) => (
-          <div key={label} className="bg-gray-800 rounded p-3">
-            {mLoading
-              ? <Skeleton className="h-6 w-12 mb-1" />
-              : <div className={`text-xl font-bold ${color}`}>{value ?? '—'}</div>}
-            <div className="text-[9px] text-gray-500 mt-0.5 uppercase tracking-wide">{label}</div>
-          </div>
-        ))}
-      </div>
+      {/* 2-column grid: left = monthly activity, right = top destinations */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
 
-      {/* Monthly bar chart */}
-      <div>
-        <div className="text-[9px] text-gray-500 uppercase tracking-wide mb-1">Flights per month</div>
-        {mLoading
-          ? <Skeleton className="h-20 w-full" />
-          : <MonthlyChart series={monthly?.monthly_series ?? []} />}
+        {/* ── Left: Monthly Activity ── */}
+        <div>
+          <div className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider mb-3">Monthly Activity</div>
+
+          {/* KPI cards */}
+          <div className="grid grid-cols-4 gap-2 mb-4">
+            {([
+              { label: 'Total Flights',   value: mkpi?.total_flights,   color: 'text-white' },
+              { label: 'Takeoffs',        value: mkpi?.takeoffs,        color: 'text-green-400' },
+              { label: 'Landings',        value: mkpi?.landings,        color: 'text-blue-400' },
+              { label: 'Active Aircraft', value: mkpi?.active_aircraft, color: 'text-purple-400' },
+            ] as const).map(({ label, value, color }) => (
+              <div key={label} className="bg-gray-800 rounded p-3">
+                {mLoading
+                  ? <Skeleton className="h-6 w-12 mb-1" />
+                  : <div className={`text-xl font-bold ${color}`}>{value ?? '—'}</div>}
+                <div className="text-[9px] text-gray-500 mt-0.5 uppercase tracking-wide">{label}</div>
+              </div>
+            ))}
+          </div>
+
+          {/* Monthly bar chart */}
+          <div>
+            <div className="text-[9px] text-gray-500 uppercase tracking-wide mb-1">Flights per month</div>
+            {mLoading
+              ? <Skeleton className="h-20 w-full" />
+              : <MonthlyChart series={monthly?.monthly_series ?? []} />}
+          </div>
+        </div>
+
+        {/* ── Right: Top Destinations ── */}
+        <div>
+          <div className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider mb-3">Top Destinations</div>
+
+          {topDestLoading && (
+            <div className="flex flex-col gap-2">
+              {Array.from({ length: 6 }).map((_, i) => (
+                <div key={i} className="flex items-center gap-2">
+                  <Skeleton className="h-4 w-8 shrink-0" />
+                  <Skeleton className="h-4 flex-1" />
+                  <Skeleton className="h-4 w-6 shrink-0" />
+                </div>
+              ))}
+            </div>
+          )}
+
+          {!topDestLoading && topDest.length === 0 && (
+            <div className="flex flex-col items-center justify-center py-8 text-center">
+              <div className="text-2xl mb-2 opacity-30">✈</div>
+              <p className="text-xs text-gray-600">No destination data yet.<br />Landings accumulate over time.</p>
+            </div>
+          )}
+
+          {!topDestLoading && topDest.length > 0 && (() => {
+            const shown = topDest.slice(0, 10);
+            const maxCount = shown[0]?.count ?? 1;
+            const known   = shown.filter(d => d.airport !== 'UNKNOWN');
+            const unknown = shown.filter(d => d.airport === 'UNKNOWN');
+            const ordered = [...known, ...unknown];
+            return (
+              <ol className="flex flex-col gap-1.5">
+                {ordered.map((d, i) => {
+                  const isUnknown = d.airport === 'UNKNOWN';
+                  const pct = Math.round((d.count / maxCount) * 100);
+                  return (
+                    <li key={d.airport} className="flex items-center gap-2 text-[11px]">
+                      <span className={`w-5 text-right shrink-0 font-mono ${isUnknown ? 'text-gray-600' : 'text-gray-500'}`}>
+                        {isUnknown ? '—' : i + 1}
+                      </span>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center justify-between gap-1 mb-0.5">
+                          <span className={`font-semibold truncate ${isUnknown ? 'text-gray-600' : 'text-gray-200'}`}>
+                            {isUnknown ? 'Unknown airport' : d.airport}
+                          </span>
+                          <span className={`shrink-0 font-mono text-[10px] ${isUnknown ? 'text-gray-600' : 'text-gray-400'}`}>
+                            {d.count}
+                          </span>
+                        </div>
+                        <div className="h-1 rounded-full bg-gray-800 overflow-hidden">
+                          <div
+                            className={`h-full rounded-full transition-all ${isUnknown ? 'bg-gray-700' : 'bg-blue-600'}`}
+                            style={{ width: `${pct}%` }}
+                          />
+                        </div>
+                        {!isUnknown && d.name && d.name !== d.airport && (
+                          <div className="text-[9px] text-gray-600 truncate mt-0.5">{d.name}</div>
+                        )}
+                      </div>
+                    </li>
+                  );
+                })}
+              </ol>
+            );
+          })()}
+        </div>
+
       </div>
     </div>
 
