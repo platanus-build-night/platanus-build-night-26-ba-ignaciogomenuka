@@ -64,6 +64,19 @@ interface ReplayStep {
   last_50_events: FleetEvent[];
 }
 
+interface MonthlySeries {
+  month: string;
+  flights: number;
+  takeoffs: number;
+  landings: number;
+}
+
+interface MonthlyData {
+  filters_applied: Record<string, string>;
+  kpis: { total_flights: number; takeoffs: number; landings: number; active_aircraft: number };
+  monthly_series: MonthlySeries[];
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function eventKey(ev: FleetEvent) {
@@ -130,6 +143,39 @@ function BarChart({ series }: { series: HourlyEntry[] }) {
   );
 }
 
+const PLANES = [
+  { icao24: 'e0659a', tail: 'LV-FVZ' },
+  { icao24: 'e030cf', tail: 'LV-CCO' },
+  { icao24: 'e06546', tail: 'LV-FUF' },
+  { icao24: 'e0b341', tail: 'LV-KMA' },
+  { icao24: 'e0b058', tail: 'LV-KAX' },
+];
+
+function MonthlyChart({ series }: { series: MonthlySeries[] }) {
+  if (!series.length) return (
+    <div className="flex items-center justify-center h-20 text-xs text-gray-600">No data for selected range</div>
+  );
+  const max = Math.max(...series.map(s => s.flights), 1);
+  const W = 500, H = 72, labelH = 14;
+  const bw = W / series.length;
+  return (
+    <svg viewBox={`0 0 ${W} ${H + labelH}`} className="w-full" preserveAspectRatio="none">
+      {series.map((s, i) => {
+        const barH = Math.max(2, (s.flights / max) * H);
+        const mo = new Date(s.month + '-02').toLocaleString('default', { month: 'short' });
+        return (
+          <g key={s.month}>
+            <rect x={i * bw + 1} y={H - barH} width={bw - 2} height={barH}
+              fill="#3b82f6" opacity={0.8} rx={1} />
+            <text x={i * bw + bw / 2} y={H + labelH - 1}
+              textAnchor="middle" fontSize={9} fill="#6b7280">{mo}</text>
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
+
 // ─── Dashboard ────────────────────────────────────────────────────────────────
 
 export default function Dashboard() {
@@ -150,6 +196,13 @@ export default function Dashboard() {
   const [isPlaying, setIsPlaying]       = useState(false);
   const [playSpeed, setPlaySpeed]       = useState<1 | 4>(1);
   const [replayLoading, setReplayLoading] = useState(false);
+
+  // Monthly analytics state
+  const today   = new Date().toISOString().slice(0, 10);
+  const yearAgo = new Date(Date.now() - 365 * 86400_000).toISOString().slice(0, 10);
+  const [mFilters, setMFilters] = useState({ startDate: yearAgo, endDate: today, aircraft: '' });
+  const [monthly, setMonthly]   = useState<MonthlyData | null>(null);
+  const [mLoading, setMLoading] = useState(false);
 
   // Track which event keys have already been shown — don't highlight on first load
   const seenKeys    = useRef<Set<string>>(new Set());
@@ -261,6 +314,20 @@ export default function Dashboard() {
     }
   }
 
+  const fetchMonthly = useCallback(async (filters: typeof mFilters) => {
+    setMLoading(true);
+    try {
+      const p = new URLSearchParams({ start_date: filters.startDate, end_date: filters.endDate });
+      if (filters.aircraft) p.set('aircraft_id', filters.aircraft);
+      const res = await fetch(`/analytics/monthly?${p}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      setMonthly(await res.json());
+    } catch { /* silent — monthly section shows empty state */ }
+    finally { setMLoading(false); }
+  }, []);
+
+  useEffect(() => { fetchMonthly(mFilters); }, [fetchMonthly, mFilters]);
+
   const displaySnap = replayMode && replaySteps.length > 0 ? replaySteps[replayIdx] : snapshot;
   const kpis = displaySnap?.fleet_kpis;
 
@@ -274,8 +341,11 @@ export default function Dashboard() {
     return matchSearch && matchStatus;
   });
 
+  const mkpi = monthly?.kpis;
+
   return (
-    <div className="flex flex-col h-screen bg-gray-950 text-gray-100 overflow-hidden">
+    <div className="bg-gray-950 text-gray-100">
+    <div className="flex flex-col h-screen overflow-hidden">
 
       {/* ── Error banner ── */}
       {error && <ErrorBanner msg={error} onDismiss={() => setError(null)} />}
@@ -550,6 +620,71 @@ export default function Dashboard() {
           </table>
         </div>
       </div>
+    </div>
+
+    {/* ── Monthly Activity ── */}
+    <div className="border-t border-gray-800 bg-gray-900 px-5 py-4">
+
+      {/* Section header */}
+      <div className="flex items-center justify-between mb-3">
+        <span className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider">Monthly Activity</span>
+        {mLoading && <span className="text-[10px] text-gray-600 animate-pulse">Loading…</span>}
+      </div>
+
+      {/* Filters */}
+      <div className="flex flex-wrap items-center gap-2 mb-4">
+        <div className="flex items-center gap-1 text-[11px]">
+          <label className="text-gray-500">From</label>
+          <input
+            type="date" value={mFilters.startDate}
+            onChange={e => setMFilters(f => ({ ...f, startDate: e.target.value }))}
+            className="bg-gray-800 text-gray-200 rounded px-2 py-1 text-[11px] outline-none focus:ring-1 focus:ring-blue-700"
+          />
+        </div>
+        <div className="flex items-center gap-1 text-[11px]">
+          <label className="text-gray-500">To</label>
+          <input
+            type="date" value={mFilters.endDate}
+            onChange={e => setMFilters(f => ({ ...f, endDate: e.target.value }))}
+            className="bg-gray-800 text-gray-200 rounded px-2 py-1 text-[11px] outline-none focus:ring-1 focus:ring-blue-700"
+          />
+        </div>
+        <select
+          value={mFilters.aircraft}
+          onChange={e => setMFilters(f => ({ ...f, aircraft: e.target.value }))}
+          className="bg-gray-800 text-gray-200 text-[11px] rounded px-2 py-1 outline-none focus:ring-1 focus:ring-blue-700"
+        >
+          <option value="">All aircraft</option>
+          {PLANES.map(p => <option key={p.icao24} value={p.icao24}>{p.tail}</option>)}
+        </select>
+      </div>
+
+      {/* KPI cards */}
+      <div className="grid grid-cols-4 gap-2 mb-4">
+        {([
+          { label: 'Total Flights',    value: mkpi?.total_flights,    color: 'text-white' },
+          { label: 'Takeoffs',         value: mkpi?.takeoffs,         color: 'text-green-400' },
+          { label: 'Landings',         value: mkpi?.landings,         color: 'text-blue-400' },
+          { label: 'Active Aircraft',  value: mkpi?.active_aircraft,  color: 'text-purple-400' },
+        ] as const).map(({ label, value, color }) => (
+          <div key={label} className="bg-gray-800 rounded p-3">
+            {mLoading
+              ? <Skeleton className="h-6 w-12 mb-1" />
+              : <div className={`text-xl font-bold ${color}`}>{value ?? '—'}</div>}
+            <div className="text-[9px] text-gray-500 mt-0.5 uppercase tracking-wide">{label}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Monthly bar chart */}
+      <div>
+        <div className="text-[9px] text-gray-500 uppercase tracking-wide mb-1">Flights per month</div>
+        {mLoading
+          ? <Skeleton className="h-20 w-full" />
+          : <MonthlyChart series={monthly?.monthly_series ?? []} />}
+      </div>
+    </div>
+
     </div>
   );
 }

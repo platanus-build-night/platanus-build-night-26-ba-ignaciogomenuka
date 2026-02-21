@@ -19,7 +19,7 @@ def get_monthly_analytics(conn, start_date=None, end_date=None,
     start_date, end_date = _defaults(start_date, end_date)
     filters_applied      = _filters(start_date, end_date, operator_name, watchlist_id, aircraft_id)
 
-    extra       = " AND e.aircraft_id = %s" if aircraft_id else ""
+    extra       = " AND e.aircraft_id = (SELECT id FROM aircraft WHERE icao24 = %s)" if aircraft_id else ""
     base_params = [start_date, end_date] + ([aircraft_id] if aircraft_id else [])
 
     with conn.cursor() as cur:
