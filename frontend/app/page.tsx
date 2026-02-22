@@ -392,6 +392,7 @@ export default function Dashboard() {
   const [feedMode, setFeedMode]             = useState<'live' | 'history'>('live');
   const [flightHistory, setFlightHistory]   = useState<FlightEntry[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError]     = useState<string | null>(null);
 
   // Monthly analytics state
   const today   = new Date().toISOString().slice(0, 10);
@@ -575,18 +576,22 @@ export default function Dashboard() {
 
   const fetchFlightHistory = useCallback(async () => {
     setHistoryLoading(true);
+    setHistoryError(null);
     try {
       const res = await fetch('/api/flight-board?limit=40');
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       setFlightHistory(data.flights ?? []);
-    } catch (e) { console.error(e); }
-    finally { setHistoryLoading(false); }
+    } catch (e) {
+      setHistoryError(e instanceof Error ? e.message : 'Error al cargar historial');
+    } finally { setHistoryLoading(false); }
   }, []);
 
+  // Fetch on mount so data is ready when user switches to Historial
+  useEffect(() => { fetchFlightHistory(); }, [fetchFlightHistory]);
+
   useEffect(() => {
-    if (feedMode === 'history') fetchFlightHistory();
-    else if (replayMode) stopReplay();
+    if (feedMode !== 'history' && replayMode) stopReplay();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [feedMode]);
 
@@ -889,7 +894,20 @@ export default function Dashboard() {
 
           {/* ── HISTORY MODE ── */}
           {feedMode === 'history' && (
-            <div className="flex-1 overflow-y-auto">
+            <div className="flex-1 overflow-y-auto flex flex-col">
+              {/* sub-header with refresh */}
+              <div className="px-3 py-1.5 border-b border-gray-800 shrink-0 flex items-center justify-between text-[10px] text-gray-500">
+                <span>{historyLoading ? 'Cargando…' : `${flightHistory.length} vuelos`}</span>
+                <button onClick={fetchFlightHistory} disabled={historyLoading}
+                  className="hover:text-gray-300 transition-colors disabled:opacity-40">↺</button>
+              </div>
+
+              {historyError && (
+                <div className="mx-3 mt-2 px-2 py-1.5 bg-red-950/60 border border-red-800/40 rounded text-[10px] text-red-400">
+                  {historyError}
+                </div>
+              )}
+
               {historyLoading && Array.from({ length: 5 }).map((_, i) => (
                 <div key={i} className="px-3 py-3 border-b border-gray-800/50">
                   <div className="flex justify-between mb-2">
@@ -901,7 +919,7 @@ export default function Dashboard() {
                 </div>
               ))}
 
-              {!historyLoading && flightHistory.length === 0 && (
+              {!historyLoading && !historyError && flightHistory.length === 0 && (
                 <div className="flex flex-col items-center justify-center py-12 text-center px-4">
                   <div className="text-2xl mb-2 opacity-30">✈️</div>
                   <p className="text-xs text-gray-600">Sin historial de vuelos.</p>
