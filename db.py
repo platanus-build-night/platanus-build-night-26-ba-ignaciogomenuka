@@ -1,5 +1,6 @@
 import json
 from datetime import timedelta
+from airports import nearest_airport
 
 
 def get_snapshot(conn):
@@ -16,8 +17,16 @@ def get_snapshot(conn):
             LEFT JOIN positions p ON p.aircraft_id = a.id
             ORDER BY a.id, p.ts DESC NULLS LAST
         """)
-        latest_positions = [
-            {
+        raw_positions = cur.fetchall()
+        latest_positions = []
+        for r in raw_positions:
+            on_ground = bool(r["on_ground"])
+            location = None
+            if on_ground and r["lat"] is not None and r["lon"] is not None:
+                apt = nearest_airport(float(r["lat"]), float(r["lon"]), radius_km=80)
+                if apt:
+                    location = apt["iata"]
+            latest_positions.append({
                 "tail_number": r["tail_number"],
                 "icao24": r["icao24"],
                 "ts": r["ts"].isoformat() if r["ts"] else None,
@@ -26,11 +35,10 @@ def get_snapshot(conn):
                 "altitude": r["altitude"],
                 "velocity": r["velocity"],
                 "heading": r["heading"],
-                "on_ground": bool(r["on_ground"]),
+                "on_ground": on_ground,
                 "source": r["source"],
-            }
-            for r in cur.fetchall()
-        ]
+                "location": location,
+            })
 
         # KPIs + freshness in one round-trip
         cur.execute("""

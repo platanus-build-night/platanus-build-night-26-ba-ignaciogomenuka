@@ -21,6 +21,7 @@ interface Position {
   heading: number | null;
   on_ground: boolean;
   source: string;
+  location: string | null;
 }
 
 interface FleetEvent {
@@ -870,7 +871,7 @@ export default function Dashboard() {
             <table className="w-full text-[11px]">
               <thead className="sticky top-0 bg-gray-900/95 backdrop-blur-sm z-10">
                 <tr className="text-gray-500 text-left border-b border-gray-800">
-                  {['Tail', 'ICAO24', 'Status', 'Altitude', 'Speed', 'Heading', 'Source', 'Last seen'].map(h => (
+                  {['Tail', 'ICAO24', 'Status', 'Location', 'Altitude', 'Speed', 'Heading', 'Source', 'Last seen'].map(h => (
                     <th key={h} className="px-3 py-1.5 font-medium">{h}</th>
                   ))}
                 </tr>
@@ -878,7 +879,7 @@ export default function Dashboard() {
               <tbody className="divide-y divide-gray-800/50">
                 {isLoading && Array.from({ length: 4 }).map((_, i) => (
                   <tr key={i}>
-                    {Array.from({ length: 8 }).map((_, j) => (
+                    {Array.from({ length: 9 }).map((_, j) => (
                       <td key={j} className="px-3 py-2">
                         <Skeleton className="h-3" style={{ width: `${40 + (j * 13) % 40}px` }} />
                       </td>
@@ -896,6 +897,13 @@ export default function Dashboard() {
                         {p.on_ground ? 'Ground' : 'Air'}
                       </span>
                     </td>
+                    <td className="px-3 py-1.5">
+                      {p.on_ground
+                        ? p.location
+                          ? <span className="font-mono font-bold text-amber-400 text-xs">{p.location}</span>
+                          : <span className="text-gray-600 text-xs">near {p.lat != null ? `${p.lat.toFixed(1)},${p.lon?.toFixed(1)}` : '—'}</span>
+                        : <span className="text-gray-600">—</span>}
+                    </td>
                     <td className="px-3 py-1.5 text-gray-300">{p.altitude != null ? `${Math.round(p.altitude)} ft` : '—'}</td>
                     <td className="px-3 py-1.5 text-gray-300">{p.velocity != null ? `${Math.round(p.velocity)} km/h` : '—'}</td>
                     <td className="px-3 py-1.5 text-gray-300">{p.heading != null ? `${Math.round(p.heading)}°` : '—'}</td>
@@ -905,7 +913,7 @@ export default function Dashboard() {
                 ))}
                 {!isLoading && filteredPositions.length === 0 && (
                   <tr>
-                    <td colSpan={8} className="px-3 py-6 text-center text-gray-600 text-xs">
+                    <td colSpan={9} className="px-3 py-6 text-center text-gray-600 text-xs">
                       {search || statusFilter !== 'all' ? 'No aircraft match your filters.' : 'No aircraft positions recorded yet.'}
                     </td>
                   </tr>
