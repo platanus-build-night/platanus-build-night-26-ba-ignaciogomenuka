@@ -637,6 +637,23 @@ export default function Dashboard() {
     return matchSearch && matchStatus;
   });
 
+  // Live feed: exclude completed flights (TAKEOFF that has a matching LANDING, and LANDING events)
+  const allFeedEvents = displaySnap?.last_50_events ?? [];
+  const landedTakeoffKeys = new Set<string>();
+  allFeedEvents.forEach(ev => {
+    if (ev.type === 'LANDING') {
+      const matchingTakeoff = allFeedEvents.find(
+        e2 => e2.icao24 === ev.icao24 && e2.type === 'TAKEOFF' && e2.ts < ev.ts
+      );
+      if (matchingTakeoff) landedTakeoffKeys.add(`${matchingTakeoff.icao24}-${matchingTakeoff.ts}`);
+    }
+  });
+  const liveEvents = allFeedEvents.filter(ev => {
+    if (ev.type === 'LANDING') return false;
+    if (ev.type === 'TAKEOFF' && landedTakeoffKeys.has(`${ev.icao24}-${ev.ts}`)) return false;
+    return true;
+  });
+
   const mkpi = monthly?.kpis;
 
   return (
@@ -723,15 +740,15 @@ export default function Dashboard() {
               {!isLoading && (displaySnap?.last_50_events.length ?? 0) === 0 && (
                 <div className="flex flex-col items-center justify-center py-12 text-center px-4">
                   <div className="text-2xl mb-2 opacity-30">📋</div>
-                  <p className="text-xs text-gray-600">Sin eventos.<br />Aparecen cuando se detectan aeronaves.</p>
+                  <p className="text-xs text-gray-600">Sin vuelos activos.<br />Los vuelos completados están en Historial.</p>
                 </div>
               )}
 
               <div className="divide-y divide-gray-800/50">
-                {displaySnap?.last_50_events.map(ev => {
+                {liveEvents.map(ev => {
                   const k = eventKey(ev);
                   const isNew = newKeys.has(k);
-                  const pos = displaySnap.latest_positions.find(p => p.icao24 === ev.icao24);
+                  const pos = displaySnap?.latest_positions.find(p => p.icao24 === ev.icao24);
                   const tailColor = TAIL_COLORS[ev.tail_number] ?? 'text-gray-200';
                   const replayKey = `${ev.icao24}-${ev.ts}`;
                   const isActiveReplay = activeReplayKey === replayKey;
@@ -749,7 +766,7 @@ export default function Dashboard() {
                   const canReplay = ev.type === 'TAKEOFF' || ev.type === 'LANDING';
                   // For LANDING, find matching TAKEOFF to use as takeoff_ts
                   const landingFlightForReplay: FlightEntry | null = ev.type === 'LANDING' ? (() => {
-                    const matchingTakeoff = displaySnap.last_50_events.find(
+                    const matchingTakeoff = allFeedEvents.find(
                       e2 => e2.icao24 === ev.icao24 && e2.type === 'TAKEOFF' && e2.ts < ev.ts
                     );
                     if (!matchingTakeoff) return null;
