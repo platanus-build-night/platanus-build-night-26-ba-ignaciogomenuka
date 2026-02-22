@@ -261,15 +261,34 @@ function FlightCard({ f }: { f: FlightEntry }) {
 // ─── Fleet availability card ──────────────────────────────────────────────────
 
 const TURNAROUND_MIN = 90;
+const STALE_MIN      = 20; // min since last position before "in air" → "sin señal"
 
-type AvailStatus = 'available' | 'in_flight' | 'turning' | 'unknown';
+type AvailStatus = 'available' | 'in_flight' | 'turning' | 'stale' | 'unknown';
 
 function availStatus(pos: Position | undefined, lastLandingTs: string | null): { status: AvailStatus; readyAt: Date | null } {
   if (!pos || !pos.ts) return { status: 'unknown', readyAt: null };
-  if (!pos.on_ground) return { status: 'in_flight', readyAt: null };
+
+  const ageMin = (Date.now() - new Date(pos.ts).getTime()) / 60000;
+
+  if (!pos.on_ground) {
+    // Landing event more recent than last position → confirmed landed
+    if (lastLandingTs && lastLandingTs > pos.ts) {
+      const landedAt  = new Date(lastLandingTs);
+      const minSince  = (Date.now() - landedAt.getTime()) / 60000;
+      if (minSince < TURNAROUND_MIN) {
+        return { status: 'turning', readyAt: new Date(landedAt.getTime() + TURNAROUND_MIN * 60000) };
+      }
+      return { status: 'available', readyAt: null };
+    }
+    // Signal lost: was airborne but no new data in STALE_MIN
+    if (ageMin > STALE_MIN) return { status: 'stale', readyAt: null };
+    return { status: 'in_flight', readyAt: null };
+  }
+
+  // on_ground = true
   if (lastLandingTs) {
     const landedAt = new Date(lastLandingTs);
-    const minAgo = (Date.now() - landedAt.getTime()) / 60000;
+    const minAgo   = (Date.now() - landedAt.getTime()) / 60000;
     if (minAgo < TURNAROUND_MIN) {
       return { status: 'turning', readyAt: new Date(landedAt.getTime() + TURNAROUND_MIN * 60000) };
     }
@@ -281,12 +300,14 @@ const AVAIL_STYLES: Record<AvailStatus, string> = {
   available: 'bg-blue-900/50 text-blue-300 border border-blue-800/40',
   in_flight: 'bg-green-900/50 text-green-300 border border-green-800/40',
   turning:   'bg-orange-900/50 text-orange-300 border border-orange-800/40',
+  stale:     'bg-yellow-900/50 text-yellow-300 border border-yellow-800/40',
   unknown:   'bg-gray-800 text-gray-600 border border-gray-700/40',
 };
 const AVAIL_LABELS: Record<AvailStatus, string> = {
   available: 'DISPONIBLE',
   in_flight: 'EN VUELO',
   turning:   'ROTANDO',
+  stale:     'SIN SEÑAL',
   unknown:   'SIN DATOS',
 };
 
@@ -312,9 +333,13 @@ function AvailCard({ plane, pos, lastLandingTs }: {
             ? <span className="font-mono font-semibold text-amber-400">{pos.location}</span>
             : status === 'in_flight'
               ? <span className="text-gray-500">en ruta</span>
-              : <span className="text-gray-600">ubicación desconocida</span>}
+              : status === 'stale'
+                ? <span className="text-yellow-600/70">señal perdida</span>
+                : <span className="text-gray-600">ubicación desconocida</span>}
         </span>
-        <span className="text-gray-600">{pos?.ts ? relTime(pos.ts) : '—'}</span>
+        <span className={status === 'stale' ? 'text-yellow-600 font-medium' : 'text-gray-600'}>
+          {pos?.ts ? relTime(pos.ts) : '—'}
+        </span>
       </div>
       {status === 'turning' && readyAt && (
         <div className="mt-1 text-[9px] text-orange-400/80 font-mono">
@@ -567,15 +592,16 @@ export default function Dashboard() {
   }, [displaySnap]);
 
   const availCounts = useMemo(() => {
-    let available = 0, in_flight = 0, turning = 0;
+    let available = 0, in_flight = 0, turning = 0, stale = 0;
     PLANES.forEach(plane => {
       const pos = displaySnap?.latest_positions.find(p => p.icao24 === plane.icao24);
       const { status } = availStatus(pos, lastLandingByAircraft[plane.icao24] ?? null);
-      if (status === 'available') available++;
+      if (status === 'available')  available++;
       else if (status === 'in_flight') in_flight++;
-      else if (status === 'turning') turning++;
+      else if (status === 'turning')   turning++;
+      else if (status === 'stale')     stale++;
     });
-    return { available, in_flight, turning };
+    return { available, in_flight, turning, stale };
   }, [displaySnap, lastLandingByAircraft]);
 
   const filteredPositions = (displaySnap?.latest_positions ?? []).filter(p => {
@@ -796,6 +822,10 @@ export default function Dashboard() {
                 <span className="text-gray-700">·</span>
                 <span className="text-orange-400">{availCounts.turning} rotando</span>
               </>}
+              {availCounts.stale > 0 && <>
+                <span className="text-gray-700">·</span>
+                <span className="text-yellow-500">{availCounts.stale} sin señal</span>
+              </>}
             </div>
           )}
 
@@ -918,15 +948,26 @@ export default function Dashboard() {
                     ))}
                   </tr>
                 ))}
-                {!isLoading && filteredPositions.map(p => (
+                {!isLoading && filteredPositions.map(p => {
+                  const { status: fs } = availStatus(p, lastLandingByAircraft[p.icao24] ?? null);
+                  const fsBadge =
+                    fs === 'in_flight' ? 'bg-green-900/80 text-green-300 ring-1 ring-green-800' :
+                    fs === 'stale'     ? 'bg-yellow-900/80 text-yellow-300 ring-1 ring-yellow-800 animate-pulse' :
+                    fs === 'turning'   ? 'bg-orange-900/80 text-orange-300 ring-1 ring-orange-800' :
+                    fs === 'unknown'   ? 'bg-gray-800 text-gray-600' :
+                                        'bg-gray-700 text-gray-400';
+                  const fsLabel =
+                    fs === 'in_flight' ? 'En vuelo' :
+                    fs === 'stale'     ? 'Sin señal' :
+                    fs === 'turning'   ? 'Rotando' :
+                    fs === 'unknown'   ? 'Sin datos' : 'En tierra';
+                  return (
                   <tr key={p.icao24} className="hover:bg-gray-800/40 transition-colors">
                     <td className="px-3 py-1.5 font-semibold text-white">{p.tail_number}</td>
                     <td className="px-3 py-1.5 text-gray-400 font-mono">{p.icao24}</td>
                     <td className="px-3 py-1.5">
-                      <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold uppercase ${
-                        p.on_ground ? 'bg-gray-700 text-gray-400' : 'bg-green-900/80 text-green-300 ring-1 ring-green-800'
-                      }`}>
-                        {p.on_ground ? 'Ground' : 'Air'}
+                      <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold uppercase ${fsBadge}`}>
+                        {fsLabel}
                       </span>
                     </td>
                     <td className="px-3 py-1.5">
@@ -942,7 +983,8 @@ export default function Dashboard() {
                     <td className="px-3 py-1.5 text-gray-500">{p.source}</td>
                     <td className="px-3 py-1.5 text-gray-500">{relTime(p.ts)}</td>
                   </tr>
-                ))}
+                  );
+                })}
                 {!isLoading && filteredPositions.length === 0 && (
                   <tr>
                     <td colSpan={9} className="px-3 py-6 text-center text-gray-600 text-xs">
