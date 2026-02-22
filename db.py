@@ -259,6 +259,7 @@ def get_flight_board(conn, limit=40, icao24=None):
         cur.execute(f"""
             SELECT
                 t.ts                                       AS takeoff_ts,
+                t.aircraft_id,
                 l.ts                                       AS landing_ts,
                 a.tail_number,
                 a.icao24,
@@ -268,14 +269,7 @@ def get_flight_board(conn, limit=40, icao24=None):
                 COALESCE(l.meta->>'destination_name',    '—') AS destination_name,
                 (t.meta->>'velocity')::float               AS velocity_kmh,
                 (t.meta->>'altitude')::float               AS cruise_alt,
-                t.meta->>'source'                          AS source,
-                (SELECT COUNT(*)
-                 FROM positions pp
-                 JOIN aircraft aa ON aa.id = pp.aircraft_id
-                 WHERE aa.icao24 = a.icao24
-                   AND pp.ts >= t.ts
-                   AND pp.ts <= t.ts + INTERVAL '16 hours'
-                ) AS track_points_count
+                t.meta->>'source'                          AS source
             FROM events t
             JOIN aircraft a ON a.id = t.aircraft_id
             LEFT JOIN LATERAL (
@@ -294,11 +288,36 @@ def get_flight_board(conn, limit=40, icao24=None):
         """, params)
         rows = cur.fetchall()
 
+    if not rows:
+        return {"flights": []}
+
+    # Bulk-fetch positions for all relevant aircraft since the earliest takeoff
+    from datetime import timedelta
+    from collections import defaultdict
+    aircraft_ids = list({r["aircraft_id"] for r in rows})
+    min_ts = min(r["takeoff_ts"] for r in rows)
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT aircraft_id, ts
+            FROM positions
+            WHERE aircraft_id = ANY(%s)
+              AND ts >= %s
+              AND lat IS NOT NULL
+        """, (aircraft_ids, min_ts))
+        pos_by_aircraft: dict = defaultdict(list)
+        for p in cur.fetchall():
+            pos_by_aircraft[p["aircraft_id"]].append(p["ts"])
+
     flights = []
     for r in rows:
         dur_s = None
         if r["landing_ts"] and r["takeoff_ts"]:
             dur_s = int((r["landing_ts"] - r["takeoff_ts"]).total_seconds())
+        end_ts = r["landing_ts"] or (r["takeoff_ts"] + timedelta(hours=16))
+        track_pts = sum(
+            1 for ts in pos_by_aircraft[r["aircraft_id"]]
+            if r["takeoff_ts"] <= ts <= end_ts
+        )
         flights.append({
             "tail_number":      r["tail_number"],
             "icao24":           r["icao24"],
@@ -311,7 +330,7 @@ def get_flight_board(conn, limit=40, icao24=None):
             "duration_s":       dur_s,
             "velocity_kmh":     float(r["velocity_kmh"]) if r["velocity_kmh"] else None,
             "cruise_alt":       float(r["cruise_alt"])   if r["cruise_alt"]   else None,
-            "track_points":     int(r["track_points_count"] or 0),
+            "track_points":     track_pts,
         })
     return {"flights": flights}
 
