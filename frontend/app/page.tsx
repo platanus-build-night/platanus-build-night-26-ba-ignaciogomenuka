@@ -330,12 +330,13 @@ function AvailCard({ plane, pos, lastLandingTs }: {
       <div className="flex items-center justify-between text-[10px]">
         <span>
           {pos?.location
-            ? <span className="font-mono font-semibold text-amber-400">{pos.location}</span>
+            ? <span className="font-mono font-semibold text-amber-400">
+                {pos.location}
+                {status === 'stale' && <span className="text-gray-600 font-normal ml-1 text-[9px]">último</span>}
+              </span>
             : status === 'in_flight'
               ? <span className="text-gray-500">en ruta</span>
-              : status === 'stale'
-                ? <span className="text-yellow-600/70">señal perdida</span>
-                : <span className="text-gray-600">ubicación desconocida</span>}
+              : <span className="text-gray-600">sin ubicación</span>}
         </span>
         <span className={status === 'stale' ? 'text-yellow-600 font-medium' : 'text-gray-600'}>
           {pos?.ts ? relTime(pos.ts) : '—'}
@@ -971,10 +972,11 @@ export default function Dashboard() {
                       </span>
                     </td>
                     <td className="px-3 py-1.5">
-                      {p.on_ground
-                        ? p.location
-                          ? <span className="font-mono font-bold text-amber-400 text-xs">{p.location}</span>
-                          : <span className="text-gray-600 text-xs">near {p.lat != null ? `${p.lat.toFixed(1)},${p.lon?.toFixed(1)}` : '—'}</span>
+                      {p.location
+                        ? <span className={`font-mono font-bold text-xs ${fs === 'stale' ? 'text-amber-600' : 'text-amber-400'}`}>
+                            {p.location}
+                            {fs === 'stale' && <span className="text-gray-600 font-normal ml-1">último</span>}
+                          </span>
                         : <span className="text-gray-600">—</span>}
                     </td>
                     <td className="px-3 py-1.5 text-gray-300">{p.altitude != null ? `${Math.round(p.altitude)} ft` : '—'}</td>

@@ -22,8 +22,8 @@ def get_snapshot(conn):
         for r in raw_positions:
             on_ground = bool(r["on_ground"])
             location = None
-            if on_ground and r["lat"] is not None and r["lon"] is not None:
-                apt = nearest_airport(float(r["lat"]), float(r["lon"]), radius_km=80)
+            if r["lat"] is not None and r["lon"] is not None:
+                apt = nearest_airport(float(r["lat"]), float(r["lon"]), radius_km=50)
                 if apt:
                     location = apt["iata"]
             latest_positions.append({
