@@ -524,34 +524,36 @@ export default function Dashboard() {
     }
   }
 
-  const fetchMonthly = useCallback(async (filters: typeof mFilters) => {
+  const fetchMonthly = useCallback(async () => {
     setMLoading(true);
     try {
-      const p = new URLSearchParams({ start_date: filters.startDate, end_date: filters.endDate });
-      if (filters.aircraft) p.set('aircraft_id', filters.aircraft);
+      const p = new URLSearchParams({ start_date: mFilters.startDate, end_date: mFilters.endDate });
+      if (mFilters.aircraft) p.set('aircraft_id', mFilters.aircraft);
       const res = await fetch(`/analytics/monthly?${p}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       setMonthly(await res.json());
-    } catch { /* silent — monthly section shows empty state */ }
-    finally { setMLoading(false); }
-  }, []);
+    } catch (e) {
+      console.error('fetchMonthly error:', e);
+    } finally { setMLoading(false); }
+  }, [mFilters]);
 
-  useEffect(() => { fetchMonthly(mFilters); }, [fetchMonthly, mFilters]);
+  useEffect(() => { fetchMonthly(); }, [fetchMonthly]);
 
-  const fetchTopDest = useCallback(async (filters: typeof mFilters) => {
+  const fetchTopDest = useCallback(async () => {
     setTopDestLoading(true);
     try {
-      const p = new URLSearchParams({ start_date: filters.startDate, end_date: filters.endDate });
-      if (filters.aircraft) p.set('aircraft_id', filters.aircraft);
+      const p = new URLSearchParams({ start_date: mFilters.startDate, end_date: mFilters.endDate });
+      if (mFilters.aircraft) p.set('aircraft_id', mFilters.aircraft);
       const res = await fetch(`/analytics/top-destinations?${p}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       setTopDest(data.top_destinations ?? []);
-    } catch { /* silent */ }
-    finally { setTopDestLoading(false); }
-  }, []);
+    } catch (e) {
+      console.error('fetchTopDest error:', e);
+    } finally { setTopDestLoading(false); }
+  }, [mFilters]);
 
-  useEffect(() => { fetchTopDest(mFilters); }, [fetchTopDest, mFilters]);
+  useEffect(() => { fetchTopDest(); }, [fetchTopDest]);
 
   const fetchFlights = useCallback(async () => {
     setFlightsLoading(true);
