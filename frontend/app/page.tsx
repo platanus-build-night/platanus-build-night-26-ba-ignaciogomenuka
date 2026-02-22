@@ -385,7 +385,9 @@ export default function Dashboard() {
   // Monthly analytics state
   const today   = new Date().toISOString().slice(0, 10);
   const yearAgo = new Date(Date.now() - 365 * 86400_000).toISOString().slice(0, 10);
-  const [mFilters, setMFilters]       = useState({ startDate: yearAgo, endDate: today, aircraft: '' });
+  const [analyticsStart, setAnalyticsStart]   = useState(yearAgo);
+  const [analyticsEnd,   setAnalyticsEnd]     = useState(today);
+  const [analyticsAircraft, setAnalyticsAircraft] = useState('');
   const [monthly, setMonthly]         = useState<MonthlyData | null>(null);
   const [mLoading, setMLoading]       = useState(false);
   const [topDest, setTopDest]         = useState<TopDest[]>([]);
@@ -527,23 +529,23 @@ export default function Dashboard() {
   const fetchMonthly = useCallback(async () => {
     setMLoading(true);
     try {
-      const p = new URLSearchParams({ start_date: mFilters.startDate, end_date: mFilters.endDate });
-      if (mFilters.aircraft) p.set('aircraft_id', mFilters.aircraft);
+      const p = new URLSearchParams({ start_date: analyticsStart, end_date: analyticsEnd });
+      if (analyticsAircraft) p.set('aircraft_id', analyticsAircraft);
       const res = await fetch(`/analytics/monthly?${p}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       setMonthly(await res.json());
     } catch (e) {
       console.error('fetchMonthly error:', e);
     } finally { setMLoading(false); }
-  }, [mFilters]);
+  }, [analyticsStart, analyticsEnd, analyticsAircraft]);
 
   useEffect(() => { fetchMonthly(); }, [fetchMonthly]);
 
   const fetchTopDest = useCallback(async () => {
     setTopDestLoading(true);
     try {
-      const p = new URLSearchParams({ start_date: mFilters.startDate, end_date: mFilters.endDate });
-      if (mFilters.aircraft) p.set('aircraft_id', mFilters.aircraft);
+      const p = new URLSearchParams({ start_date: analyticsStart, end_date: analyticsEnd });
+      if (analyticsAircraft) p.set('aircraft_id', analyticsAircraft);
       const res = await fetch(`/analytics/top-destinations?${p}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
@@ -551,7 +553,7 @@ export default function Dashboard() {
     } catch (e) {
       console.error('fetchTopDest error:', e);
     } finally { setTopDestLoading(false); }
-  }, [mFilters]);
+  }, [analyticsStart, analyticsEnd, analyticsAircraft]);
 
   useEffect(() => { fetchTopDest(); }, [fetchTopDest]);
 
@@ -913,14 +915,14 @@ export default function Dashboard() {
           {activeTab === 'analytics' && (
             <div className="flex items-center gap-2 px-3 ml-2 text-[11px]">
               <label className="text-gray-500 shrink-0">From</label>
-              <input type="date" value={mFilters.startDate}
-                onChange={e => setMFilters(f => ({ ...f, startDate: e.target.value }))}
+              <input type="date" value={analyticsStart}
+                onChange={e => setAnalyticsStart(e.target.value)}
                 className="bg-gray-800 text-gray-200 rounded px-2 py-0.5 text-[11px] outline-none focus:ring-1 focus:ring-blue-700" />
               <label className="text-gray-500 shrink-0">To</label>
-              <input type="date" value={mFilters.endDate}
-                onChange={e => setMFilters(f => ({ ...f, endDate: e.target.value }))}
+              <input type="date" value={analyticsEnd}
+                onChange={e => setAnalyticsEnd(e.target.value)}
                 className="bg-gray-800 text-gray-200 rounded px-2 py-0.5 text-[11px] outline-none focus:ring-1 focus:ring-blue-700" />
-              <select value={mFilters.aircraft} onChange={e => setMFilters(f => ({ ...f, aircraft: e.target.value }))}
+              <select value={analyticsAircraft} onChange={e => setAnalyticsAircraft(e.target.value)}
                 className="bg-gray-800 text-gray-200 text-[11px] rounded px-2 py-0.5 outline-none focus:ring-1 focus:ring-blue-700">
                 <option value="">All aircraft</option>
                 {PLANES.map(p => <option key={p.icao24} value={p.icao24}>{p.tail}</option>)}
