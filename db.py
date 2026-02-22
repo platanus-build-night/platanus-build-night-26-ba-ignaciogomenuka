@@ -242,6 +242,64 @@ def get_replay_range(conn, start_dt, end_dt, step_seconds, aircraft_icao24=None)
     return steps
 
 
+def get_flight_board(conn, limit=40, icao24=None):
+    """Return last N flights (TAKEOFF + matching LANDING) with origin/destination airports."""
+    icao_filter = " AND a.icao24 = %s" if icao24 else ""
+    params = ([icao24] if icao24 else []) + [limit]
+
+    with conn.cursor() as cur:
+        cur.execute(f"""
+            SELECT
+                t.ts                                       AS takeoff_ts,
+                l.ts                                       AS landing_ts,
+                a.tail_number,
+                a.icao24,
+                COALESCE(t.meta->>'origin_airport', '—')  AS origin,
+                COALESCE(t.meta->>'origin_name',    '—')  AS origin_name,
+                COALESCE(l.meta->>'destination_airport','—') AS destination,
+                COALESCE(l.meta->>'destination_name',    '—') AS destination_name,
+                (t.meta->>'velocity')::float               AS velocity_kmh,
+                (t.meta->>'altitude')::float               AS cruise_alt,
+                t.meta->>'source'                          AS source
+            FROM events t
+            JOIN aircraft a ON a.id = t.aircraft_id
+            LEFT JOIN LATERAL (
+                SELECT l2.ts, l2.meta FROM events l2
+                WHERE l2.aircraft_id = t.aircraft_id
+                  AND l2.type = 'LANDING'
+                  AND l2.ts > t.ts
+                  AND l2.ts < t.ts + INTERVAL '16 hours'
+                ORDER BY l2.ts ASC LIMIT 1
+            ) l ON true
+            WHERE t.type = 'TAKEOFF'
+              AND (t.meta->>'velocity')::float > 80
+              {icao_filter}
+            ORDER BY t.ts DESC
+            LIMIT %s
+        """, params)
+        rows = cur.fetchall()
+
+    flights = []
+    for r in rows:
+        dur_s = None
+        if r["landing_ts"] and r["takeoff_ts"]:
+            dur_s = int((r["landing_ts"] - r["takeoff_ts"]).total_seconds())
+        flights.append({
+            "tail_number":      r["tail_number"],
+            "icao24":           r["icao24"],
+            "takeoff_ts":       r["takeoff_ts"].isoformat(),
+            "landing_ts":       r["landing_ts"].isoformat() if r["landing_ts"] else None,
+            "origin":           r["origin"],
+            "origin_name":      r["origin_name"],
+            "destination":      r["destination"],
+            "destination_name": r["destination_name"],
+            "duration_s":       dur_s,
+            "velocity_kmh":     float(r["velocity_kmh"]) if r["velocity_kmh"] else None,
+            "cruise_alt":       float(r["cruise_alt"])   if r["cruise_alt"]   else None,
+        })
+    return {"flights": flights}
+
+
 def get_last_seen_from_db(conn):
     """Returns {tail_number: unix_timestamp} of the latest position per aircraft."""
     with conn.cursor() as cur:

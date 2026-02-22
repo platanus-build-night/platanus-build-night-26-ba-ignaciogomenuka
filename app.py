@@ -8,7 +8,7 @@ import psycopg2
 import psycopg2.extras
 from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
-from db import get_snapshot, has_recent_event, get_last_seen_from_db, get_snapshot_at, get_replay_range
+from db import get_snapshot, has_recent_event, get_last_seen_from_db, get_snapshot_at, get_replay_range, get_flight_board
 from forecast import get_forecast
 from analytics import get_monthly_analytics, get_top_destinations
 from airports import nearest_airport
@@ -95,6 +95,33 @@ def save_flight_event(icao24, event_type, data=None):
                     print(f"  Dedup: skipping {event_type.upper()} for {icao24}")
                     return
                 meta = dict(data or {})
+
+                if event_type.upper() == "TAKEOFF":
+                    lat = meta.get("lat") if meta.get("lat") not in (None, "N/A") else None
+                    lon = meta.get("lon") if meta.get("lon") not in (None, "N/A") else None
+                    if lat is not None and lon is not None:
+                        apt = nearest_airport(float(lat), float(lon))
+                        if apt:
+                            meta["origin_airport"] = apt["iata"]
+                            meta["origin_name"]    = apt["name"]
+                        else:
+                            meta["origin_airport"] = "UNKNOWN"
+                    else:
+                        # Fallback: use the destination of the previous landing as origin
+                        cur.execute("""
+                            SELECT meta->>'destination_airport' AS dest,
+                                   meta->>'destination_name'    AS dest_name
+                            FROM events
+                            WHERE aircraft_id = %s AND type = 'LANDING'
+                            ORDER BY ts DESC LIMIT 1
+                        """, (aircraft_id,))
+                        prev = cur.fetchone()
+                        if prev and prev["dest"] and prev["dest"] not in ("UNKNOWN", None):
+                            meta["origin_airport"] = prev["dest"]
+                            meta["origin_name"]    = prev["dest_name"] or prev["dest"]
+                        else:
+                            meta["origin_airport"] = "UNKNOWN"
+
                 if event_type.upper() == "LANDING":
                     # Use last known position within 2h (grace period is 10min, 5min was too narrow)
                     cur.execute("""
@@ -783,6 +810,17 @@ def analytics_top_destinations():
     try:
         with get_db() as conn:
             return jsonify(get_top_destinations(conn, **_parse_analytics_params()))
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/flight-board')
+def api_flight_board():
+    limit = min(int(request.args.get('limit', 40)), 100)
+    icao24 = request.args.get('icao24') or None
+    try:
+        with get_db() as conn:
+            return jsonify(get_flight_board(conn, limit, icao24))
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 

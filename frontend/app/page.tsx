@@ -83,6 +83,20 @@ interface TopDest {
   count: number;
 }
 
+interface FlightEntry {
+  tail_number: string;
+  icao24: string;
+  takeoff_ts: string;
+  landing_ts: string | null;
+  origin: string;
+  origin_name: string;
+  destination: string;
+  destination_name: string;
+  duration_s: number | null;
+  velocity_kmh: number | null;
+  cruise_alt: number | null;
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function eventKey(ev: FleetEvent) {
@@ -187,6 +201,98 @@ function MonthlyChart({ series }: { series: MonthlySeries[] }) {
   );
 }
 
+// ─── Flight board card ────────────────────────────────────────────────────────
+
+const TAIL_COLORS: Record<string, string> = {
+  'LV-FVZ': 'text-sky-300',
+  'LV-CCO': 'text-emerald-300',
+  'LV-FUF': 'text-amber-300',
+  'LV-KMA': 'text-rose-300',
+  'LV-KAX': 'text-violet-300',
+};
+
+function fmtTime(iso: string) {
+  return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+function fmtDate(iso: string) {
+  return new Date(iso).toLocaleDateString([], { month: 'short', day: 'numeric' });
+}
+function fmtDur(s: number) {
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  return h > 0 ? `${h}h ${m}m` : `${m}m`;
+}
+
+function FlightCard({ f }: { f: FlightEntry }) {
+  const landed    = !!f.landing_ts;
+  const unknown   = (v: string) => !v || v === '—' || v === 'UNKNOWN';
+  const hasRoute  = !unknown(f.origin) || !unknown(f.destination);
+  const durStr    = f.duration_s ? fmtDur(f.duration_s) : null;
+  const altFL     = f.cruise_alt ? `FL${Math.round(f.cruise_alt / 100)}` : null;
+  const tailColor = TAIL_COLORS[f.tail_number] ?? 'text-gray-200';
+
+  return (
+    <div className="shrink-0 w-52 bg-gray-950 border border-gray-700/60 rounded-lg overflow-hidden flex flex-col">
+
+      {/* ── Header strip ── */}
+      <div className={`flex items-center justify-between px-3 py-2 border-b border-gray-800 ${
+        landed ? 'bg-blue-950/40' : 'bg-green-950/40'
+      }`}>
+        <span className={`font-mono font-bold text-sm ${tailColor}`}>{f.tail_number}</span>
+        <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wider ${
+          landed
+            ? 'bg-blue-900/60 text-blue-300 border border-blue-800/60'
+            : 'bg-green-900/60 text-green-300 border border-green-800/60 animate-pulse'
+        }`}>
+          {landed ? 'ATERRIZÓ' : 'EN VUELO'}
+        </span>
+      </div>
+
+      {/* ── Route ── */}
+      <div className="flex items-stretch gap-0 flex-1 px-3 py-2.5">
+        {/* Origin */}
+        <div className="flex flex-col items-center min-w-0 w-16 shrink-0">
+          <span className={`font-mono text-xl font-black leading-none ${unknown(f.origin) ? 'text-gray-600' : 'text-amber-400'}`}>
+            {unknown(f.origin) ? '???' : f.origin}
+          </span>
+          <span className="text-[9px] text-gray-500 text-center leading-tight mt-0.5 truncate w-full">
+            {unknown(f.origin_name) ? 'desconocido' : f.origin_name.split(' ').slice(0, 2).join(' ')}
+          </span>
+        </div>
+
+        {/* Arrow */}
+        <div className="flex flex-col items-center justify-center flex-1 gap-0.5 px-1">
+          <div className="w-full flex items-center">
+            <div className="flex-1 border-t border-dashed border-gray-600" />
+            <span className="text-gray-500 text-xs mx-0.5">✈</span>
+            <div className="flex-1 border-t border-dashed border-gray-600" />
+          </div>
+          {hasRoute && durStr && (
+            <span className="text-[9px] text-gray-600 font-mono">{durStr}</span>
+          )}
+        </div>
+
+        {/* Destination */}
+        <div className="flex flex-col items-center min-w-0 w-16 shrink-0">
+          <span className={`font-mono text-xl font-black leading-none ${unknown(f.destination) ? 'text-gray-600' : 'text-amber-400'}`}>
+            {unknown(f.destination) ? '???' : f.destination}
+          </span>
+          <span className="text-[9px] text-gray-500 text-center leading-tight mt-0.5 truncate w-full">
+            {unknown(f.destination_name) ? 'desconocido' : f.destination_name.split(' ').slice(0, 2).join(' ')}
+          </span>
+        </div>
+      </div>
+
+      {/* ── Footer ── */}
+      <div className="px-3 py-1.5 border-t border-gray-800 bg-gray-900/40 flex items-center justify-between text-[10px] text-gray-500 font-mono">
+        <span>{fmtDate(f.takeoff_ts)} {fmtTime(f.takeoff_ts)}</span>
+        {altFL && <span className="text-gray-600">{altFL}</span>}
+        {f.landing_ts && <span>{fmtTime(f.landing_ts)}</span>}
+      </div>
+    </div>
+  );
+}
+
 // ─── Dashboard ────────────────────────────────────────────────────────────────
 
 export default function Dashboard() {
@@ -208,7 +314,9 @@ export default function Dashboard() {
   const [playSpeed, setPlaySpeed]           = useState<1 | 4>(1);
   const [replayLoading, setReplayLoading]   = useState(false);
   const [replayAircraft, setReplayAircraft] = useState('');
-  const [activeTab, setActiveTab]           = useState<'fleet' | 'analytics'>('fleet');
+  const [activeTab, setActiveTab]           = useState<'fleet' | 'analytics' | 'flights'>('fleet');
+  const [flights, setFlights]               = useState<FlightEntry[]>([]);
+  const [flightsLoading, setFlightsLoading] = useState(false);
 
   // Replay date range (datetime-local format: YYYY-MM-DDTHH:MM)
   const [replayStart, setReplayStart] = useState(() => {
@@ -401,6 +509,21 @@ export default function Dashboard() {
   }, []);
 
   useEffect(() => { fetchTopDest(mFilters); }, [fetchTopDest, mFilters]);
+
+  const fetchFlights = useCallback(async () => {
+    setFlightsLoading(true);
+    try {
+      const res = await fetch('/api/flight-board?limit=40');
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      setFlights(data.flights ?? []);
+    } catch { /* silent */ }
+    finally { setFlightsLoading(false); }
+  }, []);
+
+  useEffect(() => {
+    if (activeTab === 'flights') fetchFlights();
+  }, [activeTab, fetchFlights]);
 
   const displaySnap = replayMode && replaySteps.length > 0 ? replaySteps[replayIdx] : snapshot;
   const kpis = displaySnap?.fleet_kpis;
@@ -677,22 +800,26 @@ export default function Dashboard() {
 
       {/* ── Bottom Tabbed Panel ── */}
       <div className={`shrink-0 border-t border-gray-800 bg-gray-900 flex flex-col transition-[height] duration-300 ease-in-out ${
-        activeTab === 'analytics' ? 'h-80' : 'h-44'
+        activeTab === 'fleet' ? 'h-44' : 'h-80'
       }`}>
 
         {/* Tab bar */}
         <div className="flex items-center h-8 border-b border-gray-800 shrink-0">
-          {(['fleet', 'analytics'] as const).map(tab => (
+          {([
+            { key: 'fleet',     label: 'Fleet' },
+            { key: 'flights',   label: 'Vuelos' },
+            { key: 'analytics', label: 'Analytics' },
+          ] as const).map(({ key, label }) => (
             <button
-              key={tab}
-              onClick={() => setActiveTab(tab)}
+              key={key}
+              onClick={() => setActiveTab(key)}
               className={`shrink-0 px-3 h-full text-[11px] font-medium border-r border-gray-800 transition-colors ${
-                activeTab === tab
+                activeTab === key
                   ? 'text-white bg-gray-800/60 border-b-2 border-b-blue-500'
                   : 'text-gray-500 hover:text-gray-300 hover:bg-gray-800/30'
               }`}
             >
-              {tab === 'fleet' ? 'Fleet' : 'Analytics'}
+              {label}
             </button>
           ))}
 
@@ -785,6 +912,36 @@ export default function Dashboard() {
                 )}
               </tbody>
             </table>
+          </div>
+        )}
+
+        {/* ── Flights content ── */}
+        {activeTab === 'flights' && (
+          <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+            {/* Sub-header */}
+            <div className="px-4 py-1.5 border-b border-gray-800 shrink-0 flex items-center gap-3 text-[10px] text-gray-500">
+              <span>Últimos {flights.length} vuelos</span>
+              <button onClick={fetchFlights} className="hover:text-gray-300 transition-colors">↺ Actualizar</button>
+              {flightsLoading && <span className="animate-pulse">Cargando…</span>}
+            </div>
+            {/* Cards — horizontal scroll */}
+            <div className="flex-1 overflow-x-auto overflow-y-hidden">
+              {flightsLoading && flights.length === 0 ? (
+                <div className="flex gap-3 p-3">
+                  {Array.from({ length: 6 }).map((_, i) => (
+                    <div key={i} className="shrink-0 w-52 h-36 bg-gray-800 rounded-lg animate-pulse" />
+                  ))}
+                </div>
+              ) : flights.length === 0 ? (
+                <div className="flex items-center justify-center h-full text-xs text-gray-600">
+                  No hay vuelos registrados aún.
+                </div>
+              ) : (
+                <div className="flex gap-3 p-3 h-full items-center">
+                  {flights.map((f, i) => <FlightCard key={`${f.icao24}-${f.takeoff_ts}-${i}`} f={f} />)}
+                </div>
+              )}
+            </div>
           </div>
         )}
 

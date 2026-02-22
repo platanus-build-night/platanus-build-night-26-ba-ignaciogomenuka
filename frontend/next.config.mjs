@@ -7,6 +7,7 @@ const nextConfig = {
       { source: '/forecast/:path*',  destination: `${backend}/forecast/:path*`  },
       { source: '/replay/:path*',     destination: `${backend}/replay/:path*`     },
       { source: '/analytics/:path*', destination: `${backend}/analytics/:path*` },
+      { source: '/api/:path*',       destination: `${backend}/api/:path*`       },
     ];
   },
 };
