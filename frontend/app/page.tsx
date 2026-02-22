@@ -46,17 +46,6 @@ interface Snapshot {
   data_freshness_seconds: number;
 }
 
-interface HourlyEntry {
-  ts_hour_start: string;
-  expected: number;
-}
-
-interface Forecast {
-  expected_total: number;
-  ci_low: number;
-  ci_high: number;
-  hourly_series: HourlyEntry[];
-}
 
 interface ReplayStep {
   ts: string;
@@ -139,31 +128,6 @@ function ErrorBanner({ msg, onDismiss }: { msg: string; onDismiss: () => void })
   );
 }
 
-function BarChart({ series }: { series: HourlyEntry[] }) {
-  if (!series.length) return null;
-  const max = Math.max(...series.map(h => h.expected), 0.01);
-  const W = 240, H = 56;
-  const bw = W / series.length;
-  const nowHour = new Date().getHours();
-
-  return (
-    <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-14" preserveAspectRatio="none">
-      {series.map((h, i) => {
-        const barH = Math.max(1, (h.expected / max) * (H - 4));
-        const isCurrent = new Date(h.ts_hour_start).getHours() === nowHour;
-        return (
-          <rect
-            key={i}
-            x={i * bw + 1} y={H - barH}
-            width={bw - 2} height={barH}
-            fill={isCurrent ? '#93c5fd' : '#1d4ed8'}
-            opacity={0.85} rx={1}
-          />
-        );
-      })}
-    </svg>
-  );
-}
 
 const PLANES = [
   { icao24: 'e0659a', tail: 'LV-FVZ' },
@@ -294,11 +258,77 @@ function FlightCard({ f }: { f: FlightEntry }) {
   );
 }
 
+// ─── Fleet availability card ──────────────────────────────────────────────────
+
+const TURNAROUND_MIN = 90;
+
+type AvailStatus = 'available' | 'in_flight' | 'turning' | 'unknown';
+
+function availStatus(pos: Position | undefined, lastLandingTs: string | null): { status: AvailStatus; readyAt: Date | null } {
+  if (!pos || !pos.ts) return { status: 'unknown', readyAt: null };
+  if (!pos.on_ground) return { status: 'in_flight', readyAt: null };
+  if (lastLandingTs) {
+    const landedAt = new Date(lastLandingTs);
+    const minAgo = (Date.now() - landedAt.getTime()) / 60000;
+    if (minAgo < TURNAROUND_MIN) {
+      return { status: 'turning', readyAt: new Date(landedAt.getTime() + TURNAROUND_MIN * 60000) };
+    }
+  }
+  return { status: 'available', readyAt: null };
+}
+
+const AVAIL_STYLES: Record<AvailStatus, string> = {
+  available: 'bg-blue-900/50 text-blue-300 border border-blue-800/40',
+  in_flight: 'bg-green-900/50 text-green-300 border border-green-800/40',
+  turning:   'bg-orange-900/50 text-orange-300 border border-orange-800/40',
+  unknown:   'bg-gray-800 text-gray-600 border border-gray-700/40',
+};
+const AVAIL_LABELS: Record<AvailStatus, string> = {
+  available: 'DISPONIBLE',
+  in_flight: 'EN VUELO',
+  turning:   'ROTANDO',
+  unknown:   'SIN DATOS',
+};
+
+function AvailCard({ plane, pos, lastLandingTs }: {
+  plane: { icao24: string; tail: string };
+  pos: Position | undefined;
+  lastLandingTs: string | null;
+}) {
+  const { status, readyAt } = availStatus(pos, lastLandingTs);
+  const tailColor = TAIL_COLORS[plane.tail] ?? 'text-gray-200';
+
+  return (
+    <div className="px-3 py-2.5 border-b border-gray-800 last:border-b-0">
+      <div className="flex items-center justify-between mb-1.5">
+        <span className={`font-mono font-bold text-sm ${tailColor}`}>{plane.tail}</span>
+        <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${AVAIL_STYLES[status]}`}>
+          {AVAIL_LABELS[status]}
+        </span>
+      </div>
+      <div className="flex items-center justify-between text-[10px]">
+        <span>
+          {pos?.location
+            ? <span className="font-mono font-semibold text-amber-400">{pos.location}</span>
+            : status === 'in_flight'
+              ? <span className="text-gray-500">en ruta</span>
+              : <span className="text-gray-600">ubicación desconocida</span>}
+        </span>
+        <span className="text-gray-600">{pos?.ts ? relTime(pos.ts) : '—'}</span>
+      </div>
+      {status === 'turning' && readyAt && (
+        <div className="mt-1 text-[9px] text-orange-400/80 font-mono">
+          lista ~{readyAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Dashboard ────────────────────────────────────────────────────────────────
 
 export default function Dashboard() {
   const [snapshot, setSnapshot]       = useState<Snapshot | null>(null);
-  const [forecast, setForecast]       = useState<Forecast | null>(null);
   const [freshness, setFreshness]     = useState(0);
   const [isLoading, setIsLoading]     = useState(true);
   const [refreshing, setRefreshing]   = useState(false);
@@ -383,26 +413,12 @@ export default function Dashboard() {
     }
   }, []);
 
-  const fetchForecast = useCallback(async () => {
-    try {
-      const res = await fetch('/forecast/24h');
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      setForecast(await res.json());
-    } catch { /* forecast errors don't block the dashboard */ }
-  }, []);
-
   useEffect(() => {
     if (replayMode) return;
     fetchSnapshot();
     const id = setInterval(fetchSnapshot, 5000);
     return () => clearInterval(id);
   }, [fetchSnapshot, replayMode]);
-
-  useEffect(() => {
-    fetchForecast();
-    const id = setInterval(fetchForecast, 60_000);
-    return () => clearInterval(id);
-  }, [fetchForecast]);
 
   // Tick displayed freshness every second
   useEffect(() => {
@@ -539,6 +555,28 @@ export default function Dashboard() {
     }
     return pts;
   }, [replayMode, replayAircraft, replaySteps, replayIdx]);
+
+  const lastLandingByAircraft = useMemo(() => {
+    const map: Record<string, string> = {};
+    (displaySnap?.last_50_events ?? []).forEach(ev => {
+      if (ev.type === 'LANDING' && (!map[ev.icao24] || ev.ts > map[ev.icao24])) {
+        map[ev.icao24] = ev.ts;
+      }
+    });
+    return map;
+  }, [displaySnap]);
+
+  const availCounts = useMemo(() => {
+    let available = 0, in_flight = 0, turning = 0;
+    PLANES.forEach(plane => {
+      const pos = displaySnap?.latest_positions.find(p => p.icao24 === plane.icao24);
+      const { status } = availStatus(pos, lastLandingByAircraft[plane.icao24] ?? null);
+      if (status === 'available') available++;
+      else if (status === 'in_flight') in_flight++;
+      else if (status === 'turning') turning++;
+    });
+    return { available, in_flight, turning };
+  }, [displaySnap, lastLandingByAircraft]);
 
   const filteredPositions = (displaySnap?.latest_positions ?? []).filter(p => {
     const q = search.toLowerCase();
@@ -740,62 +778,56 @@ export default function Dashboard() {
           <FleetMap positions={displaySnap?.latest_positions ?? []} trail={trail.length > 1 ? trail : undefined} />
         </div>
 
-        {/* Right: Forecast */}
-        <aside className="w-60 shrink-0 flex flex-col border-l border-gray-800 bg-gray-900 overflow-y-auto">
+        {/* Right: Fleet availability */}
+        <aside className="w-60 shrink-0 flex flex-col border-l border-gray-800 bg-gray-900">
           <div className="px-3 py-2 text-[10px] font-semibold text-gray-500 uppercase tracking-wider border-b border-gray-800 shrink-0">
-            24h Forecast
+            Disponibilidad
           </div>
 
-          {isLoading && (
-            <div className="p-3 flex flex-col gap-3">
-              <div className="grid grid-cols-3 gap-1.5">
-                {[0, 1, 2].map(i => <Skeleton key={i} className="h-12" />)}
-              </div>
-              <Skeleton className="h-14" />
-              <Skeleton className="h-3 w-3/4" />
+          {/* Summary strip */}
+          {!isLoading && (
+            <div className="px-3 py-2 border-b border-gray-800 shrink-0 flex items-center gap-2 text-[11px]">
+              <span className="text-blue-300 font-semibold">{availCounts.available} disponible{availCounts.available !== 1 ? 's' : ''}</span>
+              {availCounts.in_flight > 0 && <>
+                <span className="text-gray-700">·</span>
+                <span className="text-green-400">{availCounts.in_flight} en vuelo</span>
+              </>}
+              {availCounts.turning > 0 && <>
+                <span className="text-gray-700">·</span>
+                <span className="text-orange-400">{availCounts.turning} rotando</span>
+              </>}
             </div>
           )}
 
-          {!isLoading && !forecast && (
-            <div className="flex flex-col items-center justify-center py-12 px-4 text-center">
-              <div className="text-2xl mb-2 opacity-30">📊</div>
-              <p className="text-xs text-gray-600">Forecast unavailable</p>
-            </div>
-          )}
+          {/* Per-aircraft cards */}
+          <div className="flex-1 overflow-y-auto">
+            {isLoading
+              ? Array.from({ length: 5 }).map((_, i) => (
+                  <div key={i} className="px-3 py-2.5 border-b border-gray-800">
+                    <div className="flex justify-between mb-1.5">
+                      <Skeleton className="h-4 w-16" />
+                      <Skeleton className="h-4 w-20" />
+                    </div>
+                    <Skeleton className="h-3 w-24" />
+                  </div>
+                ))
+              : PLANES.map(plane => {
+                  const pos = displaySnap?.latest_positions.find(p => p.icao24 === plane.icao24);
+                  return (
+                    <AvailCard
+                      key={plane.icao24}
+                      plane={plane}
+                      pos={pos}
+                      lastLandingTs={lastLandingByAircraft[plane.icao24] ?? null}
+                    />
+                  );
+                })}
+          </div>
 
-          {forecast && (
-            <div className="p-3 flex flex-col gap-3">
-              {forecast.expected_total === 0 && (
-                <div className="text-[10px] text-yellow-600 bg-yellow-900/20 border border-yellow-900/40 rounded px-2 py-1.5 leading-relaxed">
-                  ⚠ Insufficient history. Forecast improves as flights accumulate.
-                </div>
-              )}
-              <div className="grid grid-cols-3 gap-1.5 text-center">
-                <div className="bg-gray-800 rounded p-2">
-                  <div className="text-base font-bold text-white">{forecast.expected_total.toFixed(1)}</div>
-                  <div className="text-[9px] text-gray-500 mt-0.5">Expected</div>
-                </div>
-                <div className="bg-gray-800 rounded p-2">
-                  <div className="text-base font-bold text-green-400">{forecast.ci_low.toFixed(1)}</div>
-                  <div className="text-[9px] text-gray-500 mt-0.5">CI Low</div>
-                </div>
-                <div className="bg-gray-800 rounded p-2">
-                  <div className="text-base font-bold text-blue-400">{forecast.ci_high.toFixed(1)}</div>
-                  <div className="text-[9px] text-gray-500 mt-0.5">CI High</div>
-                </div>
-              </div>
-              <div>
-                <div className="text-[9px] text-gray-500 mb-1 uppercase tracking-wide">Hourly expected takeoffs</div>
-                <BarChart series={forecast.hourly_series} />
-                <div className="flex justify-between text-[9px] text-gray-600 mt-1">
-                  <span>now</span><span>+12h</span><span>+24h</span>
-                </div>
-              </div>
-              <div className="text-[9px] text-gray-600 pt-1 border-t border-gray-800">
-                Poisson CI · deterministic · no ML
-              </div>
-            </div>
-          )}
+          {/* Turnaround note */}
+          <div className="px-3 py-2 border-t border-gray-800 shrink-0 text-[9px] text-gray-700">
+            Rotación estimada: {TURNAROUND_MIN} min desde aterrizaje
+          </div>
         </aside>
       </div>
 
