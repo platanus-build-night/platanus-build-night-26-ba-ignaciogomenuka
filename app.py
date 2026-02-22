@@ -52,6 +52,21 @@ def save_position(icao24, plane_data):
                 aircraft_id = get_aircraft_id(cur, icao24)
                 if not aircraft_id:
                     return
+                alt = plane_data.get("altitude")
+                vel = plane_data.get("velocity")
+                raw_on_ground = plane_data.get("on_ground", False)
+                # ADSB.one doesn't reliably populate on_ground — derive from altitude/velocity
+                if plane_data.get("source") == "ADSB.one":
+                    alt_num = alt if isinstance(alt, (int, float)) else None
+                    vel_num = vel if isinstance(vel, (int, float)) else None
+                    if alt_num is not None and vel_num is not None:
+                        on_ground = alt_num < 1000 and vel_num < 80
+                    elif alt_num is not None:
+                        on_ground = alt_num < 500
+                    else:
+                        on_ground = raw_on_ground
+                else:
+                    on_ground = raw_on_ground
                 cur.execute("""
                     INSERT INTO positions (aircraft_id, lat, lon, altitude, velocity, heading, on_ground, source)
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
@@ -59,10 +74,10 @@ def save_position(icao24, plane_data):
                     aircraft_id,
                     plane_data.get("lat") if plane_data.get("lat") != "N/A" else None,
                     plane_data.get("lon") if plane_data.get("lon") != "N/A" else None,
-                    plane_data.get("altitude") if plane_data.get("altitude") != "N/A" else None,
-                    plane_data.get("velocity") if plane_data.get("velocity") != "N/A" else None,
+                    alt if alt != "N/A" else None,
+                    vel if vel != "N/A" else None,
                     plane_data.get("heading") if plane_data.get("heading") != "N/A" else None,
-                    plane_data.get("on_ground", False),
+                    on_ground,
                     plane_data.get("source"),
                 ))
     except Exception as e:
@@ -81,10 +96,11 @@ def save_flight_event(icao24, event_type, data=None):
                     return
                 meta = dict(data or {})
                 if event_type.upper() == "LANDING":
+                    # Use last known position within 2h (grace period is 10min, 5min was too narrow)
                     cur.execute("""
                         SELECT lat, lon FROM positions
                         WHERE aircraft_id = %s AND lat IS NOT NULL
-                          AND ts >= NOW() - INTERVAL '5 minutes'
+                          AND ts >= NOW() - INTERVAL '2 hours'
                         ORDER BY ts DESC LIMIT 1
                     """, (aircraft_id,))
                     pos = cur.fetchone()
@@ -274,6 +290,17 @@ def check_flights():
         icao24 = plane_data["icao24"]
 
         if registration not in active_planes:
+            # Skip ground movements misdetected as takeoffs (altitude < 500ft AND velocity < 80km/h)
+            alt = plane_data.get("altitude", "N/A")
+            vel = plane_data.get("velocity", "N/A")
+            alt_num = alt if isinstance(alt, (int, float)) else None
+            vel_num = vel if isinstance(vel, (int, float)) else None
+            is_airborne = (alt_num is not None and alt_num > 500) or (vel_num is not None and vel_num > 80)
+            if not is_airborne:
+                print(f"  Skipping ground movement for {registration}: alt={alt}, vel={vel}")
+                active_planes.add(registration)   # track it so we don't re-evaluate next cycle
+                continue
+
             altitude_unit = "m" if plane_data["source"] == "OpenSky" else "ft"
             is_in_progress = registration in notified_planes
             event_icon = "🔄" if is_in_progress else "✈️"
