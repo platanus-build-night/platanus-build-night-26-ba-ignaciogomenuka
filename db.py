@@ -274,7 +274,7 @@ def get_flight_board(conn, limit=40, icao24=None):
                  JOIN aircraft aa ON aa.id = pp.aircraft_id
                  WHERE aa.icao24 = a.icao24
                    AND pp.ts >= t.ts
-                   AND pp.ts <= COALESCE(l.ts, NOW())
+                   AND pp.ts <= t.ts + INTERVAL '16 hours'
                 ) AS track_points_count
             FROM events t
             JOIN aircraft a ON a.id = t.aircraft_id
