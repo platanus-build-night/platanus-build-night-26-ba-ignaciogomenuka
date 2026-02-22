@@ -268,7 +268,14 @@ def get_flight_board(conn, limit=40, icao24=None):
                 COALESCE(l.meta->>'destination_name',    '—') AS destination_name,
                 (t.meta->>'velocity')::float               AS velocity_kmh,
                 (t.meta->>'altitude')::float               AS cruise_alt,
-                t.meta->>'source'                          AS source
+                t.meta->>'source'                          AS source,
+                (SELECT COUNT(*)
+                 FROM positions pp
+                 JOIN aircraft aa ON aa.id = pp.aircraft_id
+                 WHERE aa.icao24 = a.icao24
+                   AND pp.ts >= t.ts
+                   AND pp.ts <= COALESCE(l.ts, NOW())
+                ) AS track_points_count
             FROM events t
             JOIN aircraft a ON a.id = t.aircraft_id
             LEFT JOIN LATERAL (
@@ -304,8 +311,35 @@ def get_flight_board(conn, limit=40, icao24=None):
             "duration_s":       dur_s,
             "velocity_kmh":     float(r["velocity_kmh"]) if r["velocity_kmh"] else None,
             "cruise_alt":       float(r["cruise_alt"])   if r["cruise_alt"]   else None,
+            "track_points":     int(r["track_points_count"] or 0),
         })
     return {"flights": flights}
+
+
+def get_flight_track(conn, icao24, takeoff_ts, landing_ts=None):
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT p.ts, p.lat, p.lon, p.altitude, p.velocity, p.heading, p.on_ground
+            FROM positions p
+            JOIN aircraft a ON a.id = p.aircraft_id
+            WHERE a.icao24 = %s
+              AND p.ts >= %s
+              AND p.ts <= COALESCE(%s, NOW())
+              AND p.lat IS NOT NULL AND p.lon IS NOT NULL
+            ORDER BY p.ts ASC
+        """, (icao24, takeoff_ts, landing_ts))
+        return [
+            {
+                "ts":        r["ts"].isoformat(),
+                "lat":       float(r["lat"]),
+                "lon":       float(r["lon"]),
+                "altitude":  r["altitude"],
+                "velocity":  r["velocity"],
+                "heading":   r["heading"],
+                "on_ground": bool(r["on_ground"]),
+            }
+            for r in cur.fetchall()
+        ]
 
 
 def get_last_seen_from_db(conn):

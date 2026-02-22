@@ -85,6 +85,17 @@ interface FlightEntry {
   duration_s: number | null;
   velocity_kmh: number | null;
   cruise_alt: number | null;
+  track_points: number;
+}
+
+interface TrackPoint {
+  ts: string;
+  lat: number;
+  lon: number;
+  altitude: number | null;
+  velocity: number | null;
+  heading: number | null;
+  on_ground: boolean;
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -363,24 +374,24 @@ export default function Dashboard() {
   const [statusFilter, setStatus]     = useState<'all' | 'in_air' | 'on_ground'>('all');
   const [newKeys, setNewKeys]         = useState<Set<string>>(new Set());
 
-  // Replay state
+  // Replay state (card-triggered)
   const [replayMode, setReplayMode]         = useState(false);
   const [replaySteps, setReplaySteps]       = useState<ReplayStep[]>([]);
   const [replayIdx, setReplayIdx]           = useState(0);
   const [isPlaying, setIsPlaying]           = useState(false);
-  const [playSpeed, setPlaySpeed]           = useState<1 | 4>(1);
-  const [replayLoading, setReplayLoading]   = useState(false);
+  const [playSpeed, setPlaySpeed]           = useState<1 | 2 | 4>(1);
   const [replayAircraft, setReplayAircraft] = useState('');
+  const [activeReplayKey, setActiveReplayKey] = useState<string | null>(null);
+  const [trackLoading, setTrackLoading]     = useState<string | null>(null); // key being loaded
+
   const [activeTab, setActiveTab]           = useState<'fleet' | 'analytics' | 'flights'>('fleet');
   const [flights, setFlights]               = useState<FlightEntry[]>([]);
   const [flightsLoading, setFlightsLoading] = useState(false);
 
-  // Replay date range (datetime-local format: YYYY-MM-DDTHH:MM)
-  const [replayStart, setReplayStart] = useState(() => {
-    const d = new Date(Date.now() - 2 * 3600 * 1000);
-    return d.toISOString().slice(0, 16);
-  });
-  const [replayEnd, setReplayEnd] = useState(() => new Date().toISOString().slice(0, 16));
+  // Events feed mode
+  const [feedMode, setFeedMode]             = useState<'live' | 'history'>('live');
+  const [flightHistory, setFlightHistory]   = useState<FlightEntry[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
 
   // Monthly analytics state
   const today   = new Date().toISOString().slice(0, 10);
@@ -457,72 +468,62 @@ export default function Dashboard() {
   // Replay: advance index when playing
   useEffect(() => {
     if (!isPlaying || !replayMode) return;
+    const ms = playSpeed === 4 ? 250 : playSpeed === 2 ? 500 : 1000;
     const id = setInterval(() => {
       setReplayIdx(i => {
         if (i >= replaySteps.length - 1) { setIsPlaying(false); return i; }
         return i + 1;
       });
-    }, playSpeed === 4 ? 250 : 1000);
+    }, ms);
     return () => clearInterval(id);
   }, [isPlaying, replayMode, playSpeed, replaySteps.length]);
 
-  const [lastFlightMeta, setLastFlightMeta] = useState<{ origin: string; destination: string; destination_name: string; duration_min: number; distance_km: number } | null>(null);
-
-  async function fetchLastFlight() {
-    setReplayLoading(true);
-    try {
-      const p = new URLSearchParams();
-      if (replayAircraft) p.set('icao24', replayAircraft);
-      const res = await fetch(`/replay/flight?${p}`);
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.error ?? `HTTP ${res.status}`);
-      }
-      const data = await res.json();
-      if (!data.steps?.length) throw new Error('No track data returned');
-      setReplaySteps(data.steps);
-      setReplayIdx(0);
-      setReplayAircraft(data.icao24);
-      setLastFlightMeta({
-        origin:           data.origin,
-        destination:      data.destination,
-        destination_name: data.destination_name,
-        duration_min:     data.duration_min,
-        distance_km:      data.distance_km,
-      });
-      setReplayMode(true);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Last flight fetch failed');
-    } finally {
-      setReplayLoading(false);
-    }
+  function stopReplay() {
+    setReplayMode(false);
+    setActiveReplayKey(null);
+    setIsPlaying(false);
+    setReplaySteps([]);
+    setReplayIdx(0);
   }
 
-  async function toggleReplay() {
-    if (replayMode) {
-      setReplayMode(false);
-      setIsPlaying(false);
-      setLastFlightMeta(null);
-      return;
-    }
-    const start  = new Date(replayStart);
-    const end    = new Date(replayEnd);
-    const rangeH = (end.getTime() - start.getTime()) / 3_600_000;
-    const step   = rangeH < 2 ? 60 : rangeH < 12 ? 300 : rangeH < 48 ? 900 : 1800;
-    setReplayLoading(true);
+  async function startTrackReplay(flight: FlightEntry) {
+    const key = `${flight.icao24}-${flight.takeoff_ts}`;
+    setTrackLoading(key);
     try {
-      const p = new URLSearchParams({ start: start.toISOString(), end: end.toISOString(), step_seconds: String(step) });
-      if (replayAircraft) p.set('aircraft_icao24', replayAircraft);
-      const res = await fetch(`/replay/range?${p}`);
+      const p = new URLSearchParams({ takeoff_ts: flight.takeoff_ts });
+      if (flight.landing_ts) p.set('landing_ts', flight.landing_ts);
+      const res = await fetch(`/api/flights/${flight.icao24}/track?${p}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const steps: ReplayStep[] = await res.json();
+      const { track }: { track: TrackPoint[] } = await res.json();
+      if (!track.length) throw new Error('Sin datos de track');
+      const steps: ReplayStep[] = track.map(pt => ({
+        ts: pt.ts,
+        fleet_kpis: { in_air: 1, on_ground: 4, seen_last_15m: 1, events_last_hour: 0 },
+        latest_positions: [{
+          tail_number: flight.tail_number,
+          icao24:      flight.icao24,
+          ts:          pt.ts,
+          lat:         pt.lat,
+          lon:         pt.lon,
+          altitude:    pt.altitude,
+          velocity:    pt.velocity,
+          heading:     pt.heading,
+          on_ground:   pt.on_ground,
+          source:      'track',
+          location:    null,
+        }],
+        last_50_events: [],
+      }));
       setReplaySteps(steps);
       setReplayIdx(0);
+      setReplayAircraft(flight.icao24);
+      setIsPlaying(false);
       setReplayMode(true);
+      setActiveReplayKey(key);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Replay failed');
+      setError(e instanceof Error ? e.message : 'Track fetch failed');
     } finally {
-      setReplayLoading(false);
+      setTrackLoading(null);
     }
   }
 
@@ -571,6 +572,23 @@ export default function Dashboard() {
   useEffect(() => {
     if (activeTab === 'flights') fetchFlights();
   }, [activeTab, fetchFlights]);
+
+  const fetchFlightHistory = useCallback(async () => {
+    setHistoryLoading(true);
+    try {
+      const res = await fetch('/api/flight-board?limit=40');
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      setFlightHistory(data.flights ?? []);
+    } catch (e) { console.error(e); }
+    finally { setHistoryLoading(false); }
+  }, []);
+
+  useEffect(() => {
+    if (feedMode === 'history') fetchFlightHistory();
+    else if (replayMode) stopReplay();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [feedMode]);
 
   const displaySnap = replayMode && replaySteps.length > 0 ? replaySteps[replayIdx] : snapshot;
   const kpis = displaySnap?.fleet_kpis;
@@ -654,154 +672,319 @@ export default function Dashboard() {
           )}
         </div>
         <div className="flex items-center gap-3 text-[11px]">
-          {!replayMode && (
-            <span className="text-gray-500">
-              Data age: <span className={freshness > 60 ? 'text-yellow-400' : 'text-gray-400'}>{freshness}s</span>
-            </span>
-          )}
-          {!replayMode && (
-            <div className="flex items-center gap-1 text-[10px]">
-              <input
-                type="datetime-local"
-                value={replayStart}
-                onChange={e => setReplayStart(e.target.value)}
-                className="bg-gray-800 text-gray-200 text-[10px] rounded px-1.5 py-1 outline-none focus:ring-1 focus:ring-indigo-700"
-              />
-              <span className="text-gray-600">→</span>
-              <input
-                type="datetime-local"
-                value={replayEnd}
-                onChange={e => setReplayEnd(e.target.value)}
-                className="bg-gray-800 text-gray-200 text-[10px] rounded px-1.5 py-1 outline-none focus:ring-1 focus:ring-indigo-700"
-              />
-            </div>
-          )}
-          <select
-            value={replayAircraft}
-            onChange={e => setReplayAircraft(e.target.value)}
-            disabled={replayMode}
-            className="bg-gray-800 text-gray-200 text-[11px] rounded px-2 py-1 outline-none focus:ring-1 focus:ring-indigo-700 disabled:opacity-40"
-          >
-            <option value="">All fleet</option>
-            {PLANES.map(p => <option key={p.icao24} value={p.icao24}>{p.tail}</option>)}
-          </select>
-          {!replayMode && (
+          <span className="text-gray-500">
+            Data age: <span className={freshness > 60 ? 'text-yellow-400' : 'text-gray-400'}>{freshness}s</span>
+          </span>
+          {replayMode && (
             <button
-              onClick={fetchLastFlight}
-              disabled={replayLoading}
-              className="px-2 py-1 rounded text-[11px] font-medium transition-colors bg-amber-900/80 hover:bg-amber-800 text-amber-300 disabled:opacity-40"
+              onClick={stopReplay}
+              className="px-2 py-1 rounded text-[11px] font-medium bg-indigo-600 hover:bg-indigo-500 text-white transition-colors"
             >
-              {replayLoading ? '⏳' : '🛫 Last Flight'}
+              📡 Live
             </button>
           )}
-          <button
-            onClick={replayMode ? toggleReplay : toggleReplay}
-            disabled={replayLoading}
-            className={`px-2 py-1 rounded text-[11px] font-medium transition-colors ${
-              replayMode
-                ? 'bg-indigo-600 hover:bg-indigo-500 text-white'
-                : 'bg-gray-800 hover:bg-gray-700 text-gray-300'
-            }`}
-          >
-            {replayLoading ? '⏳' : replayMode ? '📡 Live' : '⏪ Replay'}
-          </button>
         </div>
       </header>
 
-      {/* ── Replay controls bar ── */}
-      {replayMode && (
-        <div className="flex items-center gap-2 px-4 py-1.5 bg-indigo-950/80 border-b border-indigo-800 shrink-0 text-[11px]">
-          <span className="text-indigo-400 font-bold shrink-0">REPLAY</span>
-          {replayAircraft && (
-            <span className="text-indigo-300 bg-indigo-900/60 px-1.5 py-0.5 rounded shrink-0">
-              {PLANES.find(p => p.icao24 === replayAircraft)?.tail ?? replayAircraft}
-            </span>
-          )}
-          {lastFlightMeta && (
-            <span className="text-indigo-400 text-[10px] shrink-0">
-              {lastFlightMeta.origin} → {lastFlightMeta.destination}
-              <span className="text-indigo-600 ml-1">({lastFlightMeta.distance_km} km · {lastFlightMeta.duration_min}m)</span>
-            </span>
-          )}
-          <button
-            onClick={() => setIsPlaying(p => !p)}
-            className="px-2 py-0.5 rounded bg-indigo-800 hover:bg-indigo-700 text-white transition-colors"
-          >
-            {isPlaying ? '⏸' : '▶'}
-          </button>
-          <button
-            onClick={() => setPlaySpeed(s => s === 1 ? 4 : 1)}
-            className="px-2 py-0.5 rounded bg-indigo-900 hover:bg-indigo-800 text-indigo-300 transition-colors"
-          >
-            {playSpeed}x
-          </button>
-          <input
-            type="range"
-            min={0}
-            max={Math.max(0, replaySteps.length - 1)}
-            value={replayIdx}
-            onChange={e => { setIsPlaying(false); setReplayIdx(+e.target.value); }}
-            className="flex-1 accent-indigo-400"
-          />
-          <span className="text-indigo-300 whitespace-nowrap shrink-0 font-mono">
-            {replaySteps[replayIdx]
-              ? new Date(replaySteps[replayIdx].ts).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
-              : '—'}
-          </span>
-        </div>
-      )}
 
       {/* ── Main row ── */}
       <div className="flex flex-1 min-h-0">
 
-        {/* Left: Event feed */}
-        <aside className="w-60 shrink-0 flex flex-col border-r border-gray-800 bg-gray-900 overflow-y-auto">
-          <div className="px-3 py-2 text-[10px] font-semibold text-gray-500 uppercase tracking-wider border-b border-gray-800 shrink-0">
-            Event Feed
+        {/* Left: Event feed / Flight history */}
+        <aside className="w-72 shrink-0 flex flex-col border-r border-gray-800 bg-gray-900 overflow-hidden">
+          {/* Live / Historial toggle */}
+          <div className="flex shrink-0 border-b border-gray-800">
+            {(['live', 'history'] as const).map(m => (
+              <button key={m} onClick={() => setFeedMode(m)}
+                className={`flex-1 py-1.5 text-[10px] font-semibold uppercase tracking-wider transition-colors ${
+                  feedMode === m
+                    ? 'text-white bg-gray-800/60 border-b-2 border-b-blue-500'
+                    : 'text-gray-500 hover:text-gray-300'
+                }`}>
+                {m === 'live' ? 'Live' : 'Historial'}
+              </button>
+            ))}
           </div>
 
-          {isLoading && Array.from({ length: 7 }).map((_, i) => (
-            <div key={i} className="px-3 py-2.5 border-b border-gray-800/50">
-              <div className="flex justify-between mb-1.5">
-                <Skeleton className="h-3 w-14" />
-                <Skeleton className="h-3 w-12" />
-              </div>
-              <Skeleton className="h-2 w-10" />
-            </div>
-          ))}
+          {/* ── LIVE MODE ── */}
+          {feedMode === 'live' && (
+            <div className="flex-1 overflow-y-auto">
+              {isLoading && Array.from({ length: 5 }).map((_, i) => (
+                <div key={i} className="px-3 py-2.5 border-b border-gray-800/50">
+                  <div className="flex justify-between mb-1.5">
+                    <Skeleton className="h-3 w-16" />
+                    <Skeleton className="h-3 w-14" />
+                  </div>
+                  <Skeleton className="h-2 w-24 mb-1" />
+                  <Skeleton className="h-2 w-20" />
+                </div>
+              ))}
 
-          {!isLoading && displaySnap?.last_50_events.length === 0 && (
-            <div className="flex flex-col items-center justify-center py-12 text-center px-4">
-              <div className="text-2xl mb-2 opacity-30">📋</div>
-              <p className="text-xs text-gray-600">No events yet.<br />Events appear as aircraft are tracked.</p>
+              {!isLoading && (displaySnap?.last_50_events.length ?? 0) === 0 && (
+                <div className="flex flex-col items-center justify-center py-12 text-center px-4">
+                  <div className="text-2xl mb-2 opacity-30">📋</div>
+                  <p className="text-xs text-gray-600">Sin eventos.<br />Aparecen cuando se detectan aeronaves.</p>
+                </div>
+              )}
+
+              <div className="divide-y divide-gray-800/50">
+                {displaySnap?.last_50_events.map(ev => {
+                  const k = eventKey(ev);
+                  const isNew = newKeys.has(k);
+                  const pos = displaySnap.latest_positions.find(p => p.icao24 === ev.icao24);
+                  const tailColor = TAIL_COLORS[ev.tail_number] ?? 'text-gray-200';
+                  const replayKey = `${ev.icao24}-${ev.ts}`;
+                  const isActiveReplay = activeReplayKey === replayKey;
+                  const isLoadingThis = trackLoading === replayKey;
+
+                  // Build a synthetic FlightEntry for replay (live flight in progress)
+                  const liveFlightForReplay: FlightEntry = {
+                    tail_number: ev.tail_number, icao24: ev.icao24,
+                    takeoff_ts: ev.ts, landing_ts: null,
+                    origin: String(ev.meta.origin_airport ?? ''), origin_name: String(ev.meta.origin_name ?? ''),
+                    destination: '—', destination_name: '—',
+                    duration_s: null, velocity_kmh: null, cruise_alt: null, track_points: 0,
+                  };
+
+                  const canReplay = ev.type === 'TAKEOFF' || ev.type === 'LANDING';
+                  // For LANDING, find matching TAKEOFF to use as takeoff_ts
+                  const landingFlightForReplay: FlightEntry | null = ev.type === 'LANDING' ? (() => {
+                    const matchingTakeoff = displaySnap.last_50_events.find(
+                      e2 => e2.icao24 === ev.icao24 && e2.type === 'TAKEOFF' && e2.ts < ev.ts
+                    );
+                    if (!matchingTakeoff) return null;
+                    return {
+                      tail_number: ev.tail_number, icao24: ev.icao24,
+                      takeoff_ts: matchingTakeoff.ts, landing_ts: ev.ts,
+                      origin: String(matchingTakeoff.meta.origin_airport ?? ''),
+                      origin_name: String(matchingTakeoff.meta.origin_name ?? ''),
+                      destination: String(ev.meta.destination_airport ?? '—'),
+                      destination_name: String(ev.meta.destination_name ?? '—'),
+                      duration_s: null, velocity_kmh: null, cruise_alt: null, track_points: 0,
+                    };
+                  })() : null;
+
+                  const flightForReplay = ev.type === 'LANDING' ? landingFlightForReplay : liveFlightForReplay;
+
+                  return (
+                    <div key={k} className={`px-3 py-2.5 transition-all duration-500 ${
+                      isNew ? 'bg-blue-950/50 border-l-2 border-blue-500' : 'hover:bg-gray-800/40'
+                    }`}>
+                      {/* Row 1: tail + badge */}
+                      <div className="flex items-center justify-between gap-1 mb-1">
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          <span className={`font-mono font-bold text-xs ${tailColor}`}>{ev.tail_number}</span>
+                          <span className="text-[9px] text-gray-600 font-mono">{ev.icao24}</span>
+                        </div>
+                        <span className={`shrink-0 text-[9px] px-1.5 py-0.5 rounded font-bold uppercase whitespace-nowrap ${eventBadge(ev.type)}`}>
+                          {ev.type === 'EMERGENCY' ? '⚠ ' : ''}{ev.type}
+                        </span>
+                      </div>
+
+                      {/* Row 2: context */}
+                      {ev.type === 'TAKEOFF' && (
+                        <div className="text-[10px] text-gray-400 mb-0.5">
+                          <span className="font-mono text-amber-500">{String(ev.meta.origin_airport ?? '???')}</span>
+                          <span className="text-gray-600 mx-1">→</span>
+                          <span className="text-gray-500">en ruta</span>
+                          <span className="text-gray-600 mx-1.5">·</span>
+                          <span className="text-gray-500">{relTime(ev.ts)}</span>
+                        </div>
+                      )}
+                      {ev.type === 'LANDING' && (
+                        <div className="text-[10px] text-gray-400 mb-0.5">
+                          <span className="text-gray-500">???</span>
+                          <span className="text-gray-600 mx-1">→</span>
+                          <span className="font-mono text-amber-500">{String(ev.meta.destination_airport ?? '???')}</span>
+                          <span className="text-gray-600 mx-1.5">·</span>
+                          <span className="text-gray-500">{relTime(ev.ts)}</span>
+                        </div>
+                      )}
+                      {ev.type === 'APPEARED' && (
+                        <div className="text-[10px] text-gray-500 mb-0.5">
+                          Reapareció tras {Math.round(Number(ev.meta.gap_seconds ?? 0) / 3600)}h sin señal
+                          <span className="text-gray-600 mx-1">·</span>{relTime(ev.ts)}
+                        </div>
+                      )}
+                      {ev.type === 'EMERGENCY' && (
+                        <div className="text-[10px] text-red-400 mb-0.5">
+                          Squawk {String(ev.meta.squawk ?? '????')} detectado
+                          <span className="text-gray-600 mx-1">·</span>{relTime(ev.ts)}
+                        </div>
+                      )}
+                      {ev.type === 'IN_PROGRESS' && (
+                        <div className="text-[10px] text-gray-500 mb-0.5">{relTime(ev.ts)}</div>
+                      )}
+
+                      {/* Row 3: flight stats (from current position) */}
+                      {pos && (pos.altitude != null || pos.velocity != null) && (
+                        <div className="text-[9px] text-gray-600 font-mono mb-1">
+                          {pos.altitude != null && <span>{Math.round(pos.altitude)}ft</span>}
+                          {pos.velocity != null && <span className="ml-1.5">{Math.round(pos.velocity)}km/h</span>}
+                          {pos.heading  != null && <span className="ml-1.5">{Math.round(pos.heading)}°</span>}
+                        </div>
+                      )}
+
+                      {/* Replay controls (inline, only when active) */}
+                      {isActiveReplay && (
+                        <div className="mt-1.5 p-2 bg-indigo-950/60 rounded border border-indigo-800/50">
+                          <div className="flex items-center gap-1.5 mb-1">
+                            <button onClick={() => setIsPlaying(p => !p)}
+                              className="px-1.5 py-0.5 rounded bg-indigo-800 hover:bg-indigo-700 text-white text-[10px] transition-colors">
+                              {isPlaying ? '⏸' : '▶'}
+                            </button>
+                            <button onClick={() => setPlaySpeed(s => s === 1 ? 2 : s === 2 ? 4 : 1)}
+                              className="px-1.5 py-0.5 rounded bg-indigo-900 hover:bg-indigo-800 text-indigo-300 text-[10px] transition-colors">
+                              {playSpeed}x
+                            </button>
+                            <span className="text-[9px] text-indigo-400 font-mono ml-auto">
+                              {replaySteps[replayIdx]
+                                ? new Date(replaySteps[replayIdx].ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                                : '—'}
+                            </span>
+                            <button onClick={stopReplay} className="text-[9px] text-gray-600 hover:text-gray-400 transition-colors">✕</button>
+                          </div>
+                          <input type="range" min={0} max={Math.max(0, replaySteps.length - 1)}
+                            value={replayIdx}
+                            onChange={e => { setIsPlaying(false); setReplayIdx(+e.target.value); }}
+                            className="w-full accent-indigo-400 h-1" />
+                        </div>
+                      )}
+
+                      {/* Replay button (only for TAKEOFF / LANDING, not active) */}
+                      {canReplay && !isActiveReplay && flightForReplay && (
+                        <button
+                          onClick={() => startTrackReplay(flightForReplay)}
+                          disabled={isLoadingThis}
+                          className="mt-1.5 w-full text-[9px] font-medium py-1 rounded bg-indigo-900/60 hover:bg-indigo-800/60 text-indigo-300 border border-indigo-800/40 transition-colors disabled:opacity-40"
+                        >
+                          {isLoadingThis ? '⏳ Cargando…' : '⏵ Replay'}
+                        </button>
+                      )}
+
+                      {isNew && <div className="text-[9px] text-blue-400 mt-0.5">● new</div>}
+                    </div>
+                  );
+                })}
+              </div>
             </div>
           )}
 
-          <div className="divide-y divide-gray-800/50">
-            {displaySnap?.last_50_events.map(ev => {
-              const k = eventKey(ev);
-              const isNew = newKeys.has(k);
-              return (
-                <div
-                  key={k}
-                  className={`px-3 py-2 transition-all duration-500 ${
-                    isNew
-                      ? 'bg-blue-950/50 border-l-2 border-blue-500'
-                      : 'hover:bg-gray-800/40'
-                  }`}
-                >
-                  <div className="flex items-center justify-between mb-0.5 gap-1">
-                    <span className="font-semibold text-xs text-white truncate">{ev.tail_number}</span>
-                    <span className={`text-[9px] px-1.5 py-0.5 rounded font-bold uppercase whitespace-nowrap ${eventBadge(ev.type)}`}>
-                      {ev.type}
-                    </span>
+          {/* ── HISTORY MODE ── */}
+          {feedMode === 'history' && (
+            <div className="flex-1 overflow-y-auto">
+              {historyLoading && Array.from({ length: 5 }).map((_, i) => (
+                <div key={i} className="px-3 py-3 border-b border-gray-800/50">
+                  <div className="flex justify-between mb-2">
+                    <Skeleton className="h-3 w-16" />
+                    <Skeleton className="h-3 w-14" />
                   </div>
-                  <div className="text-[10px] text-gray-500">{relTime(ev.ts)}</div>
-                  {isNew && <div className="text-[9px] text-blue-400 mt-0.5">● new</div>}
+                  <Skeleton className="h-2 w-32 mb-1.5" />
+                  <Skeleton className="h-2 w-24" />
                 </div>
-              );
-            })}
-          </div>
+              ))}
+
+              {!historyLoading && flightHistory.length === 0 && (
+                <div className="flex flex-col items-center justify-center py-12 text-center px-4">
+                  <div className="text-2xl mb-2 opacity-30">✈️</div>
+                  <p className="text-xs text-gray-600">Sin historial de vuelos.</p>
+                </div>
+              )}
+
+              <div className="divide-y divide-gray-800/50">
+                {flightHistory.map((f, i) => {
+                  const key = `${f.icao24}-${f.takeoff_ts}`;
+                  const isActiveReplay = activeReplayKey === key;
+                  const isLoadingThis = trackLoading === key;
+                  const tailColor = TAIL_COLORS[f.tail_number] ?? 'text-gray-200';
+                  const hasTrack = f.track_points >= 3;
+                  const unknownOrig = !f.origin || f.origin === '—';
+                  const unknownDest = !f.destination || f.destination === '—';
+
+                  return (
+                    <div key={`${key}-${i}`} className="px-3 py-2.5 hover:bg-gray-800/40 transition-colors">
+                      {/* Row 1: tail + status */}
+                      <div className="flex items-center justify-between gap-1 mb-1.5">
+                        <span className={`font-mono font-bold text-xs ${tailColor}`}>{f.tail_number}</span>
+                        <span className={`text-[9px] px-1.5 py-0.5 rounded font-bold uppercase ${
+                          f.landing_ts
+                            ? 'bg-blue-900/60 text-blue-300 border border-blue-800/40'
+                            : 'bg-green-900/60 text-green-300 border border-green-800/40 animate-pulse'
+                        }`}>
+                          {f.landing_ts ? 'COMPLETE' : 'EN VUELO'}
+                        </span>
+                      </div>
+
+                      {/* Row 2: route */}
+                      <div className="flex items-center gap-1 text-[11px] mb-1">
+                        <span className={`font-mono font-bold ${unknownOrig ? 'text-gray-600' : 'text-amber-400'}`}>
+                          {unknownOrig ? '???' : f.origin}
+                        </span>
+                        <span className="text-gray-600 flex-1 text-center text-[8px]">───✈───</span>
+                        <span className={`font-mono font-bold ${unknownDest ? 'text-gray-600' : 'text-amber-400'}`}>
+                          {unknownDest ? '???' : f.destination}
+                        </span>
+                      </div>
+
+                      {/* Row 3: times + duration */}
+                      <div className="text-[9px] text-gray-500 font-mono mb-1">
+                        {fmtDate(f.takeoff_ts)} {fmtTime(f.takeoff_ts)}
+                        {f.landing_ts && <span> → {fmtTime(f.landing_ts)}</span>}
+                        {f.duration_s && <span className="text-gray-600 ml-1">· {fmtDur(f.duration_s)}</span>}
+                      </div>
+
+                      {/* Row 4: track info */}
+                      <div className="text-[9px] text-gray-700 mb-1.5">
+                        {f.track_points} puntos de track
+                      </div>
+
+                      {/* Inline replay controls */}
+                      {isActiveReplay && (
+                        <div className="mt-1 p-2 bg-indigo-950/60 rounded border border-indigo-800/50">
+                          <div className="flex items-center gap-1.5 mb-1">
+                            <button onClick={() => setIsPlaying(p => !p)}
+                              className="px-1.5 py-0.5 rounded bg-indigo-800 hover:bg-indigo-700 text-white text-[10px] transition-colors">
+                              {isPlaying ? '⏸' : '▶'}
+                            </button>
+                            <button onClick={() => setPlaySpeed(s => s === 1 ? 2 : s === 2 ? 4 : 1)}
+                              className="px-1.5 py-0.5 rounded bg-indigo-900 hover:bg-indigo-800 text-indigo-300 text-[10px] transition-colors">
+                              {playSpeed}x
+                            </button>
+                            <span className="text-[9px] text-indigo-400 font-mono ml-auto">
+                              {replaySteps[replayIdx]
+                                ? new Date(replaySteps[replayIdx].ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                                : '—'}
+                            </span>
+                            <button onClick={stopReplay} className="text-[9px] text-gray-600 hover:text-gray-400 transition-colors">✕</button>
+                          </div>
+                          <input type="range" min={0} max={Math.max(0, replaySteps.length - 1)}
+                            value={replayIdx}
+                            onChange={e => { setIsPlaying(false); setReplayIdx(+e.target.value); }}
+                            className="w-full accent-indigo-400 h-1" />
+                        </div>
+                      )}
+
+                      {/* Replay button */}
+                      {!isActiveReplay && (
+                        <button
+                          onClick={() => hasTrack && startTrackReplay(f)}
+                          disabled={!hasTrack || !!isLoadingThis}
+                          title={!hasTrack ? 'Replay no disponible: datos de track insuficientes.' : undefined}
+                          className={`w-full text-[9px] font-medium py-1 rounded border transition-colors ${
+                            hasTrack
+                              ? 'bg-indigo-900/60 hover:bg-indigo-800/60 text-indigo-300 border-indigo-800/40'
+                              : 'bg-gray-800/40 text-gray-600 border-gray-700/40 cursor-not-allowed'
+                          }`}
+                        >
+                          {isLoadingThis ? '⏳ Cargando…' : hasTrack ? '⏵ Replay' : '⏵ Replay no disponible'}
+                        </button>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
         </aside>
 
         {/* Center: Map */}
@@ -810,7 +993,7 @@ export default function Dashboard() {
         </div>
 
         {/* Right: Fleet availability */}
-        <aside className="w-60 shrink-0 flex flex-col border-l border-gray-800 bg-gray-900">
+        <aside className="w-72 shrink-0 flex flex-col border-l border-gray-800 bg-gray-900">
           <div className="px-3 py-2 text-[10px] font-semibold text-gray-500 uppercase tracking-wider border-b border-gray-800 shrink-0">
             Disponibilidad
           </div>

@@ -8,7 +8,7 @@ import psycopg2
 import psycopg2.extras
 from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
-from db import get_snapshot, has_recent_event, get_last_seen_from_db, get_snapshot_at, get_replay_range, get_flight_board
+from db import get_snapshot, has_recent_event, get_last_seen_from_db, get_snapshot_at, get_replay_range, get_flight_board, get_flight_track
 from forecast import get_forecast
 from analytics import get_monthly_analytics, get_top_destinations
 from airports import nearest_airport
@@ -821,6 +821,22 @@ def api_flight_board():
     try:
         with get_db() as conn:
             return jsonify(get_flight_board(conn, limit, icao24))
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/flights/<icao24>/track')
+def api_flight_track(icao24):
+    takeoff_ts_str = request.args.get('takeoff_ts')
+    landing_ts_str = request.args.get('landing_ts')
+    if not takeoff_ts_str:
+        return jsonify({"error": "takeoff_ts required"}), 400
+    try:
+        takeoff_ts = datetime.fromisoformat(takeoff_ts_str.replace('Z', '+00:00'))
+        landing_ts = datetime.fromisoformat(landing_ts_str.replace('Z', '+00:00')) if landing_ts_str else None
+        with get_db() as conn:
+            track = get_flight_track(conn, icao24, takeoff_ts, landing_ts)
+        return jsonify({"track": track, "count": len(track)})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
