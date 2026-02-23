@@ -97,10 +97,25 @@ def save_flight_event(icao24, event_type, data=None):
                 meta = dict(data or {})
 
                 if event_type.upper() == "TAKEOFF":
-                    lat = meta.get("lat") if meta.get("lat") not in (None, "N/A") else None
-                    lon = meta.get("lon") if meta.get("lon") not in (None, "N/A") else None
+                    # Prefer lowest-altitude DB position (nearest to runway) over detection-moment lat/lon
+                    cur.execute("""
+                        SELECT lat, lon FROM positions
+                        WHERE aircraft_id = %s AND lat IS NOT NULL AND altitude IS NOT NULL
+                          AND ts >= NOW() - INTERVAL '45 minutes'
+                        ORDER BY altitude ASC, ts ASC
+                        LIMIT 1
+                    """, (aircraft_id,))
+                    low_pos = cur.fetchone()
+                    if low_pos:
+                        lat, lon = float(low_pos["lat"]), float(low_pos["lon"])
+                    else:
+                        lat = meta.get("lat") if meta.get("lat") not in (None, "N/A") else None
+                        lon = meta.get("lon") if meta.get("lon") not in (None, "N/A") else None
+                        lat = float(lat) if lat is not None else None
+                        lon = float(lon) if lon is not None else None
+
                     if lat is not None and lon is not None:
-                        apt = nearest_airport(float(lat), float(lon))
+                        apt = nearest_airport(lat, lon)
                         if apt:
                             meta["origin_airport"] = apt["iata"]
                             meta["origin_name"]    = apt["name"]
@@ -123,12 +138,16 @@ def save_flight_event(icao24, event_type, data=None):
                             meta["origin_airport"] = "UNKNOWN"
 
                 if event_type.upper() == "LANDING":
-                    # Use last known position within 2h (grace period is 10min, 5min was too narrow)
+                    # Use lowest-altitude position (on_ground preferred, then lowest alt, then most recent)
                     cur.execute("""
                         SELECT lat, lon FROM positions
                         WHERE aircraft_id = %s AND lat IS NOT NULL
                           AND ts >= NOW() - INTERVAL '2 hours'
-                        ORDER BY ts DESC LIMIT 1
+                        ORDER BY
+                            CASE WHEN on_ground THEN 0 ELSE 1 END ASC,
+                            altitude ASC NULLS LAST,
+                            ts DESC
+                        LIMIT 1
                     """, (aircraft_id,))
                     pos = cur.fetchone()
                     if pos:
