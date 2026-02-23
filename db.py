@@ -291,22 +291,24 @@ def get_flight_board(conn, limit=40, icao24=None):
     if not rows:
         return {"flights": []}
 
-    # Bulk-fetch positions for all relevant aircraft since the earliest takeoff
     from datetime import timedelta
     from collections import defaultdict
-    aircraft_ids = list({r["aircraft_id"] for r in rows})
-    min_ts = min(r["takeoff_ts"] for r in rows)
-    with conn.cursor() as cur:
-        cur.execute("""
-            SELECT aircraft_id, ts
-            FROM positions
-            WHERE aircraft_id = ANY(%s)
-              AND ts >= %s
-              AND lat IS NOT NULL
-        """, (aircraft_ids, min_ts))
-        pos_by_aircraft: dict = defaultdict(list)
-        for p in cur.fetchall():
-            pos_by_aircraft[p["aircraft_id"]].append(p["ts"])
+
+    # Try to bulk-fetch track point counts; if anything fails just use 0
+    pos_by_aircraft: dict = defaultdict(list)
+    try:
+        aircraft_ids = list({r["aircraft_id"] for r in rows})
+        min_ts = min(r["takeoff_ts"] for r in rows)
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT aircraft_id, ts FROM positions"
+                " WHERE aircraft_id = ANY(%s) AND ts >= %s AND lat IS NOT NULL",
+                (aircraft_ids, min_ts),
+            )
+            for p in cur.fetchall():
+                pos_by_aircraft[p["aircraft_id"]].append(p["ts"])
+    except Exception as e:
+        print(f"[flight_board] track count fetch failed (non-fatal): {e}")
 
     flights = []
     for r in rows:
