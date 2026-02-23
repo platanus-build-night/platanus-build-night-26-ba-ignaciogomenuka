@@ -267,8 +267,8 @@ def get_flight_board(conn, limit=40, icao24=None):
                 COALESCE(t.meta->>'origin_name',    '—')  AS origin_name,
                 COALESCE(l.meta->>'destination_airport','—') AS destination,
                 COALESCE(l.meta->>'destination_name',    '—') AS destination_name,
-                (t.meta->>'velocity')::float               AS velocity_kmh,
-                (t.meta->>'altitude')::float               AS cruise_alt,
+                NULLIF(t.meta->>'velocity', '')::float     AS velocity_kmh,
+                NULLIF(t.meta->>'altitude', '')::float     AS cruise_alt,
                 t.meta->>'source'                          AS source
             FROM events t
             JOIN aircraft a ON a.id = t.aircraft_id
@@ -281,7 +281,7 @@ def get_flight_board(conn, limit=40, icao24=None):
                 ORDER BY l2.ts ASC LIMIT 1
             ) l ON true
             WHERE t.type = 'TAKEOFF'
-              AND (t.meta->>'velocity')::float > 80
+              AND NULLIF(t.meta->>'velocity', '')::float > 80
               {icao_filter}
             ORDER BY t.ts DESC
             LIMIT %s

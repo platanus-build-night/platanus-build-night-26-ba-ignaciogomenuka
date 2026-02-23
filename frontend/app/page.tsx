@@ -579,7 +579,11 @@ export default function Dashboard() {
     setHistoryError(null);
     try {
       const res = await fetch('/api/flight-board?limit=40');
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      if (!res.ok) {
+        let msg = `HTTP ${res.status}`;
+        try { const body = await res.json(); if (body.error) msg = body.error; } catch {}
+        throw new Error(msg);
+      }
       const data = await res.json();
       setFlightHistory(data.flights ?? []);
     } catch (e) {
