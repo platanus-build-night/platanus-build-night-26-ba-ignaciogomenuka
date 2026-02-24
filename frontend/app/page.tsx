@@ -689,7 +689,7 @@ export default function Dashboard() {
               error ? 'bg-red-500' : refreshing ? 'bg-yellow-400 animate-pulse' : 'bg-green-500'
             }`} />
             <span className="font-bold text-white tracking-tight text-sm">BairesRadar</span>
-            <span className="text-[10px] text-gray-600">by @ignaciogomenuka</span>
+            <a href="https://github.com/ignaciogomenuka" target="_blank" rel="noopener noreferrer" className="text-[10px] text-gray-600 hover:text-gray-400 transition-colors">by @ignaciogomenuka</a>
           </div>
           {kpis ? (
             <div className="hidden md:flex gap-1.5 text-[11px]">
