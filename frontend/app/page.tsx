@@ -22,6 +22,8 @@ interface Position {
   on_ground: boolean;
   source: string;
   location: string | null;
+  airport_lat: number | null;
+  airport_lon: number | null;
 }
 
 interface FleetEvent {
@@ -520,6 +522,8 @@ export default function Dashboard() {
           on_ground:   pt.on_ground,
           source:      'track',
           location:    null,
+          airport_lat: null,
+          airport_lon: null,
         }],
         last_50_events: [],
       }));

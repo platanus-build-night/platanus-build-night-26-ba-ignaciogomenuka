@@ -1,6 +1,6 @@
 import json
 from datetime import timedelta
-from airports import nearest_airport
+from airports import nearest_airport, nearest_airport_on_ground
 
 
 def get_snapshot(conn):
@@ -22,10 +22,16 @@ def get_snapshot(conn):
         for r in raw_positions:
             on_ground = bool(r["on_ground"])
             location = None
+            airport_lat = None
+            airport_lon = None
             if r["lat"] is not None and r["lon"] is not None:
-                apt = nearest_airport(float(r["lat"]), float(r["lon"]), radius_km=50)
+                apt = (nearest_airport_on_ground(float(r["lat"]), float(r["lon"]))
+                       if on_ground
+                       else nearest_airport(float(r["lat"]), float(r["lon"]), radius_km=50))
                 if apt:
                     location = apt["iata"]
+                    airport_lat = apt["lat"]
+                    airport_lon = apt["lon"]
             latest_positions.append({
                 "tail_number": r["tail_number"],
                 "icao24": r["icao24"],
@@ -38,6 +44,8 @@ def get_snapshot(conn):
                 "on_ground": on_ground,
                 "source": r["source"],
                 "location": location,
+                "airport_lat": airport_lat,
+                "airport_lon": airport_lon,
             })
 
         # KPIs + freshness in one round-trip
@@ -116,8 +124,20 @@ def get_snapshot_at(conn, ts):
             WHERE p.ts <= %s
             ORDER BY p.aircraft_id, p.ts DESC
         """, (ts,))
-        latest_positions = [
-            {
+        raw = cur.fetchall()
+        latest_positions = []
+        for r in raw:
+            on_ground = bool(r["on_ground"])
+            location = airport_lat = airport_lon = None
+            if r["lat"] is not None and r["lon"] is not None:
+                apt = (nearest_airport_on_ground(float(r["lat"]), float(r["lon"]))
+                       if on_ground
+                       else nearest_airport(float(r["lat"]), float(r["lon"]), radius_km=50))
+                if apt:
+                    location = apt["iata"]
+                    airport_lat = apt["lat"]
+                    airport_lon = apt["lon"]
+            latest_positions.append({
                 "tail_number": r["tail_number"],
                 "icao24": r["icao24"],
                 "ts": r["ts"].isoformat(),
@@ -126,11 +146,12 @@ def get_snapshot_at(conn, ts):
                 "altitude": r["altitude"],
                 "velocity": r["velocity"],
                 "heading": r["heading"],
-                "on_ground": r["on_ground"],
+                "on_ground": on_ground,
                 "source": r["source"],
-            }
-            for r in cur.fetchall()
-        ]
+                "location": location,
+                "airport_lat": airport_lat,
+                "airport_lon": airport_lon,
+            })
         cur.execute("""
             SELECT
                 (SELECT COUNT(DISTINCT aircraft_id) FROM positions

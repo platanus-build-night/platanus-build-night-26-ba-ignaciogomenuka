@@ -373,5 +373,11 @@ def nearest_airport(lat, lon, radius_km=50):
         d = haversine(lat, lon, alat, alon)
         if d < best_dist:
             best_dist = d
-            best = {"icao": icao, "iata": iata, "name": name, "distance_km": round(d, 1)}
+            best = {"icao": icao, "iata": iata, "name": name, "lat": alat, "lon": alon, "distance_km": round(d, 1)}
     return best
+
+
+def nearest_airport_on_ground(lat, lon):
+    """Like nearest_airport but tries progressively wider radii for on-ground aircraft.
+    First tries 50 km (normal), then 150 km (covers remote strips with poor ADS-B positioning)."""
+    return nearest_airport(lat, lon, radius_km=50) or nearest_airport(lat, lon, radius_km=150)

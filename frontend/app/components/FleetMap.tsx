@@ -15,6 +15,9 @@ interface Position {
   heading: number | null;
   on_ground: boolean;
   source: string;
+  location?: string | null;
+  airport_lat?: number | null;
+  airport_lon?: number | null;
 }
 
 function planeIcon(heading: number | null) {
@@ -33,12 +36,35 @@ function planeIcon(heading: number | null) {
   });
 }
 
+function parkedIcon() {
+  return L.divIcon({
+    className: '',
+    html: `<div style="width:28px;height:28px;display:flex;align-items:center;justify-content:center;filter:drop-shadow(0 0 3px rgba(100,116,139,0.6))">
+      <svg viewBox="0 0 24 24" width="22" height="22" fill="#475569">
+        <path d="M21 16v-2l-8-5V3.5C13 2.67 12.33 2 11.5 2S10 2.67 10 3.5V9l-8 5v2l8-2.5V19l-2 1.5V22l3.5-1 3.5 1v-1.5L13 19v-5.5l8 2.5z"/>
+      </svg>
+    </div>`,
+    iconSize: [28, 28],
+    iconAnchor: [14, 14],
+    popupAnchor: [0, -14],
+  });
+}
+
 function fmt(v: number | null, unit: string) {
   return v != null ? `${Math.round(v)} ${unit}` : '—';
 }
 
 export default function FleetMap({ positions, trail }: { positions: Position[]; trail?: [number, number][] }) {
-  const visible = positions.filter(p => p.lat != null && p.lon != null && !p.on_ground);
+  // Airborne: use raw ADS-B coords
+  const airborne = positions.filter(p => p.lat != null && p.lon != null && !p.on_ground);
+
+  // On-ground with known airport: snap to airport coordinates
+  const parked = positions.filter(
+    p => p.on_ground && p.airport_lat != null && p.airport_lon != null
+  );
+
+  // On-ground with unknown airport (no location detected): not shown on map
+  const visible = airborne.length + parked.length;
 
   return (
     <div className="relative h-full w-full">
@@ -50,7 +76,9 @@ export default function FleetMap({ positions, trail }: { positions: Position[]; 
         {trail && trail.length > 1 && (
           <Polyline positions={trail} color="#f59e0b" weight={2} opacity={0.75} />
         )}
-        {visible.map(p => (
+
+        {/* Airborne aircraft — blue icon at ADS-B coords */}
+        {airborne.map(p => (
           <Marker key={p.icao24} position={[p.lat!, p.lon!]} icon={planeIcon(p.heading)}>
             <Popup>
               <div className="text-xs leading-5">
@@ -63,23 +91,45 @@ export default function FleetMap({ positions, trail }: { positions: Position[]; 
             </Popup>
           </Marker>
         ))}
+
+        {/* On-ground aircraft — gray icon snapped to airport coordinates */}
+        {parked.map(p => (
+          <Marker key={`gnd-${p.icao24}`} position={[p.airport_lat!, p.airport_lon!]} icon={parkedIcon()}>
+            <Popup>
+              <div className="text-xs leading-5">
+                <div className="font-semibold text-sm mb-1">{p.tail_number}</div>
+                <div>En tierra · {p.location ?? '—'}</div>
+                <div className="text-gray-400 mt-1 text-[10px]">{p.source}</div>
+              </div>
+            </Popup>
+          </Marker>
+        ))}
       </MapContainer>
 
-      {/* Empty state overlay — only shown when there are no airborne aircraft */}
-      {positions.length > 0 && visible.length === 0 && (
-        <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-[1000]">
-          <div className="bg-gray-900/80 backdrop-blur-sm border border-gray-700 rounded-lg px-4 py-3 text-center">
-            <div className="text-xl mb-1 opacity-40">🛬</div>
-            <p className="text-xs text-gray-400">All aircraft on ground</p>
+      {/* Empty state: all on ground but at least one has known airport */}
+      {positions.length > 0 && airborne.length === 0 && visible > 0 && (
+        <div className="absolute bottom-4 left-1/2 -translate-x-1/2 pointer-events-none z-[1000]">
+          <div className="bg-gray-900/80 backdrop-blur-sm border border-gray-700 rounded-lg px-4 py-2 text-center">
+            <p className="text-xs text-gray-400">Todos en tierra</p>
           </div>
         </div>
       )}
 
-      {positions.length === 0 && (
+      {/* Empty state: no positions at all or all on ground with unknown location */}
+      {(positions.length === 0 || (positions.length > 0 && visible === 0)) && (
         <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-[1000]">
           <div className="bg-gray-900/80 backdrop-blur-sm border border-gray-700 rounded-lg px-4 py-3 text-center">
-            <div className="text-xl mb-1 opacity-40">📡</div>
-            <p className="text-xs text-gray-400">Waiting for aircraft positions…</p>
+            {positions.length === 0 ? (
+              <>
+                <div className="text-xl mb-1 opacity-40">📡</div>
+                <p className="text-xs text-gray-400">Waiting for aircraft positions…</p>
+              </>
+            ) : (
+              <>
+                <div className="text-xl mb-1 opacity-40">🛬</div>
+                <p className="text-xs text-gray-400">All aircraft on ground</p>
+              </>
+            )}
           </div>
         </div>
       )}
