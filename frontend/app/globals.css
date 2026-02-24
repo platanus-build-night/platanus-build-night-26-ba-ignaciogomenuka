@@ -16,3 +16,11 @@
   margin: 8px 12px;
   line-height: 1.6;
 }
+
+/* iOS safe area inset for bottom nav */
+@supports (padding-bottom: env(safe-area-inset-bottom)) {
+  nav.mobile-bottom-nav {
+    padding-bottom: env(safe-area-inset-bottom);
+    height: calc(3.5rem + env(safe-area-inset-bottom));
+  }
+}

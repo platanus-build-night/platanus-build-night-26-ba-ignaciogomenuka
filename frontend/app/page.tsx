@@ -148,6 +148,13 @@ const PLANES = [
   { icao24: 'e0b058', tail: 'LV-KAX' },
 ];
 
+// ─── Mobile nav icons (inline SVG) ────────────────────────────────────────────
+const IconMap     = () => <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M9 6.75V15m6-6v8.25m-3-10.5V19.5M3 7.5l6-3 6 3 6-3v13.5l-6 3-6-3-6 3V7.5z" /></svg>;
+const IconEvents  = () => <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M14.857 17.082a23.848 23.848 0 005.454-1.31A8.967 8.967 0 0118 9.75v-.7V9A6 6 0 006 9v.75a8.967 8.967 0 01-2.312 6.022c1.733.64 3.56 1.085 5.455 1.31m5.714 0a24.255 24.255 0 01-5.714 0m5.714 0a3 3 0 11-5.714 0" /></svg>;
+const IconFleet   = () => <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M3.75 12h16.5m-16.5 3.75h16.5M3.75 19.5h16.5M5.625 4.5h12.75a1.875 1.875 0 010 3.75H5.625a1.875 1.875 0 010-3.75z" /></svg>;
+const IconFlights = () => <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M6 12L3.269 3.126A59.768 59.768 0 0121.485 12 59.77 59.77 0 013.27 20.876L5.999 12zm0 0h7.5" /></svg>;
+const IconStats   = () => <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 013 19.875v-6.75zM9.75 8.625c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v11.25c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V8.625zM16.5 4.125c0-.621.504-1.125 1.125-1.125h2.25C20.496 3 21 3.504 21 4.125v15.75c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V4.125z" /></svg>;
+
 function MonthlyChart({ series }: { series: MonthlySeries[] }) {
   if (!series.length) return (
     <div className="flex items-center justify-center h-20 text-xs text-gray-600">No data for selected range</div>
@@ -208,14 +215,14 @@ function FlightCard({ f }: { f: FlightEntry }) {
   const tailColor = TAIL_COLORS[f.tail_number] ?? 'text-gray-200';
 
   return (
-    <div className="shrink-0 w-52 bg-gray-950 border border-gray-700/60 rounded-lg overflow-hidden flex flex-col">
+    <div className="shrink-0 w-full md:w-52 bg-gray-950 border border-gray-700/60 rounded-lg overflow-hidden flex flex-col">
 
       {/* ── Header strip ── */}
       <div className={`flex items-center justify-between px-3 py-2 border-b border-gray-800 ${
         landed ? 'bg-blue-950/40' : 'bg-green-950/40'
       }`}>
         <span className={`font-mono font-bold text-sm ${tailColor}`}>{f.tail_number}</span>
-        <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wider ${
+        <span className={`text-[10px] md:text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wider ${
           landed
             ? 'bg-blue-900/60 text-blue-300 border border-blue-800/60'
             : 'bg-green-900/60 text-green-300 border border-green-800/60 animate-pulse'
@@ -231,7 +238,7 @@ function FlightCard({ f }: { f: FlightEntry }) {
           <span className={`font-mono text-xl font-black leading-none ${unknown(f.origin) ? 'text-gray-600' : 'text-amber-400'}`}>
             {unknown(f.origin) ? '???' : f.origin}
           </span>
-          <span className="text-[9px] text-gray-500 text-center leading-tight mt-0.5 truncate w-full">
+          <span className="text-[10px] md:text-[9px] text-gray-500 text-center leading-tight mt-0.5 truncate w-full">
             {unknown(f.origin_name) ? 'desconocido' : f.origin_name.split(' ').slice(0, 2).join(' ')}
           </span>
         </div>
@@ -244,7 +251,7 @@ function FlightCard({ f }: { f: FlightEntry }) {
             <div className="flex-1 border-t border-dashed border-gray-600" />
           </div>
           {hasRoute && durStr && (
-            <span className="text-[9px] text-gray-600 font-mono">{durStr}</span>
+            <span className="text-[10px] md:text-[9px] text-gray-600 font-mono">{durStr}</span>
           )}
         </div>
 
@@ -253,7 +260,7 @@ function FlightCard({ f }: { f: FlightEntry }) {
           <span className={`font-mono text-xl font-black leading-none ${unknown(f.destination) ? 'text-gray-600' : 'text-amber-400'}`}>
             {unknown(f.destination) ? '???' : f.destination}
           </span>
-          <span className="text-[9px] text-gray-500 text-center leading-tight mt-0.5 truncate w-full">
+          <span className="text-[10px] md:text-[9px] text-gray-500 text-center leading-tight mt-0.5 truncate w-full">
             {unknown(f.destination_name) ? 'desconocido' : f.destination_name.split(' ').slice(0, 2).join(' ')}
           </span>
         </div>
@@ -334,11 +341,11 @@ function AvailCard({ plane, pos, lastLandingTs }: {
     <div className="px-3 py-2.5 border-b border-gray-800 last:border-b-0">
       <div className="flex items-center justify-between mb-1.5">
         <span className={`font-mono font-bold text-sm ${tailColor}`}>{plane.tail}</span>
-        <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${AVAIL_STYLES[status]}`}>
+        <span className={`text-[10px] md:text-[9px] font-bold px-1.5 py-0.5 rounded ${AVAIL_STYLES[status]}`}>
           {AVAIL_LABELS[status]}
         </span>
       </div>
-      <div className="flex items-center justify-between text-[10px]">
+      <div className="flex items-center justify-between text-xs md:text-[10px]">
         <span>
           {pos?.location
             ? <span className="font-mono font-semibold text-amber-400">
@@ -354,7 +361,7 @@ function AvailCard({ plane, pos, lastLandingTs }: {
         </span>
       </div>
       {status === 'turning' && readyAt && (
-        <div className="mt-1 text-[9px] text-orange-400/80 font-mono">
+        <div className="mt-1 text-[10px] md:text-[9px] text-orange-400/80 font-mono">
           lista ~{readyAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
         </div>
       )}
@@ -385,6 +392,7 @@ export default function Dashboard() {
   const [trackLoading, setTrackLoading]     = useState<string | null>(null); // key being loaded
 
   const [activeTab, setActiveTab]           = useState<'fleet' | 'analytics' | 'flights'>('fleet');
+  const [mobileTab, setMobileTab]           = useState<'map' | 'events' | 'fleet' | 'flights' | 'stats'>('map');
   const [flights, setFlights]               = useState<FlightEntry[]>([]);
   const [flightsLoading, setFlightsLoading] = useState(false);
 
@@ -683,7 +691,7 @@ export default function Dashboard() {
             <span className="font-bold text-white tracking-tight text-sm">BairesRadar</span>
           </div>
           {kpis ? (
-            <div className="flex gap-1.5 text-[11px]">
+            <div className="hidden md:flex gap-1.5 text-[11px]">
               <span className="px-2 py-0.5 rounded-full bg-green-900 text-green-300 font-medium">{kpis.in_air} in air</span>
               <span className="px-2 py-0.5 rounded-full bg-gray-800 text-gray-400">{kpis.on_ground} on ground</span>
               <span className="px-2 py-0.5 rounded-full bg-purple-900 text-purple-300">{kpis.seen_last_15m} seen/15m</span>
@@ -691,13 +699,13 @@ export default function Dashboard() {
             </div>
           ) : (
             isLoading && (
-              <div className="flex gap-1.5">
+              <div className="hidden md:flex gap-1.5">
                 {[56, 64, 72, 56].map((w, i) => <Skeleton key={i} className={`h-5 w-${w / 4} rounded-full`} />)}
               </div>
             )
           )}
         </div>
-        <div className="flex items-center gap-3 text-[11px]">
+        <div className="hidden md:flex items-center gap-3 text-[11px]">
           <span className="text-gray-500">
             Data age: <span className={freshness > 60 ? 'text-yellow-400' : 'text-gray-400'}>{freshness}s</span>
           </span>
@@ -717,7 +725,7 @@ export default function Dashboard() {
       <div className="flex flex-1 min-h-0">
 
         {/* Left: Event feed / Flight history */}
-        <aside className="w-72 shrink-0 flex flex-col border-r border-gray-800 bg-gray-900 overflow-hidden">
+        <aside className={`w-full md:w-72 shrink-0 flex-col border-r border-gray-800 bg-gray-900 overflow-hidden ${mobileTab === 'events' ? 'flex' : 'hidden'} md:flex`}>
           {/* Live / Historial toggle */}
           <div className="flex shrink-0 border-b border-gray-800">
             {(['live', 'history'] as const).map(m => (
@@ -800,7 +808,7 @@ export default function Dashboard() {
                       <div className="flex items-center justify-between gap-1 mb-1">
                         <div className="flex items-center gap-1.5 min-w-0">
                           <span className={`font-mono font-bold text-xs ${tailColor}`}>{ev.tail_number}</span>
-                          <span className="text-[9px] text-gray-600 font-mono">{ev.icao24}</span>
+                          <span className="text-[10px] md:text-[9px] text-gray-600 font-mono">{ev.icao24}</span>
                         </div>
                         <span className={`shrink-0 text-[9px] px-1.5 py-0.5 rounded font-bold uppercase whitespace-nowrap ${eventBadge(ev.type)}`}>
                           {ev.type === 'EMERGENCY' ? '⚠ ' : ''}{ev.type}
@@ -844,7 +852,7 @@ export default function Dashboard() {
 
                       {/* Row 3: flight stats (from current position) */}
                       {pos && (pos.altitude != null || pos.velocity != null) && (
-                        <div className="text-[9px] text-gray-600 font-mono mb-1">
+                        <div className="text-[10px] md:text-[9px] text-gray-600 font-mono mb-1">
                           {pos.altitude != null && <span>{Math.round(pos.altitude)}ft</span>}
                           {pos.velocity != null && <span className="ml-1.5">{Math.round(pos.velocity)}km/h</span>}
                           {pos.heading  != null && <span className="ml-1.5">{Math.round(pos.heading)}°</span>}
@@ -1027,12 +1035,33 @@ export default function Dashboard() {
         </aside>
 
         {/* Center: Map */}
-        <div className="flex-1 relative">
+        <div className={`flex-1 relative ${mobileTab === 'map' ? 'flex' : 'hidden'} md:flex`}>
           <FleetMap positions={displaySnap?.latest_positions ?? []} trail={trail.length > 1 ? trail : undefined} />
+          {/* Mobile KPI overlay */}
+          {kpis && (
+            <div className="md:hidden absolute top-2 left-2 right-2 z-[1001] grid grid-cols-2 gap-1.5 pointer-events-none">
+              <div className="bg-gray-900/85 backdrop-blur-sm rounded px-2.5 py-1.5 flex items-center gap-1.5">
+                <span className="text-green-300 font-bold text-sm">{kpis.in_air}</span>
+                <span className="text-gray-400 text-[10px]">in air</span>
+              </div>
+              <div className="bg-gray-900/85 backdrop-blur-sm rounded px-2.5 py-1.5 flex items-center gap-1.5">
+                <span className="text-gray-300 font-bold text-sm">{kpis.on_ground}</span>
+                <span className="text-gray-400 text-[10px]">on ground</span>
+              </div>
+              <div className="bg-gray-900/85 backdrop-blur-sm rounded px-2.5 py-1.5 flex items-center gap-1.5">
+                <span className="text-purple-300 font-bold text-sm">{kpis.seen_last_15m}</span>
+                <span className="text-gray-400 text-[10px]">seen/15m</span>
+              </div>
+              <div className="bg-gray-900/85 backdrop-blur-sm rounded px-2.5 py-1.5 flex items-center gap-1.5">
+                <span className="text-blue-300 font-bold text-sm">{kpis.events_last_hour}</span>
+                <span className="text-gray-400 text-[10px]">events/h</span>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Right: Fleet availability */}
-        <aside className="w-72 shrink-0 flex flex-col border-l border-gray-800 bg-gray-900">
+        <aside className={`w-full md:w-72 shrink-0 flex-col border-l border-gray-800 bg-gray-900 ${mobileTab === 'stats' ? 'flex' : 'hidden'} md:flex`}>
           <div className="px-3 py-2 text-[10px] font-semibold text-gray-500 uppercase tracking-wider border-b border-gray-800 shrink-0">
             Disponibilidad
           </div>
@@ -1085,13 +1114,45 @@ export default function Dashboard() {
           <div className="px-3 py-2 border-t border-gray-800 shrink-0 text-[9px] text-gray-700">
             Rotación estimada: {TURNAROUND_MIN} min desde aterrizaje
           </div>
+
+          {/* Mobile-only analytics section */}
+          <div className="md:hidden flex-1 overflow-y-auto border-t border-gray-800 px-3 py-3">
+            <div className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider mb-3">Analytics</div>
+            <div className="grid grid-cols-2 gap-2 mb-3">
+              {([
+                { label: 'Vuelos',     value: mkpi?.total_flights,   color: 'text-white' },
+                { label: 'Despegues',  value: mkpi?.takeoffs,        color: 'text-green-400' },
+                { label: 'Aterrizajes',value: mkpi?.landings,        color: 'text-blue-400' },
+                { label: 'Aeronaves',  value: mkpi?.active_aircraft, color: 'text-purple-400' },
+              ] as const).map(({ label, value, color }) => (
+                <div key={label} className="bg-gray-800/60 rounded px-2.5 py-2 flex items-center gap-2">
+                  {mLoading ? <Skeleton className="h-5 w-8" /> : <span className={`text-base font-bold ${color}`}>{value ?? '—'}</span>}
+                  <span className="text-[10px] text-gray-500 leading-tight">{label}</span>
+                </div>
+              ))}
+            </div>
+            <div className="mb-3">
+              <div className="text-[10px] text-gray-500 uppercase tracking-wide mb-1">Vuelos por mes</div>
+              {mLoading ? <Skeleton className="h-24 w-full" /> : <MonthlyChart series={monthly?.monthly_series ?? []} />}
+            </div>
+            <div>
+              <div className="text-[10px] text-gray-500 uppercase tracking-wide mb-1">Top destinos</div>
+              {topDestLoading && <div className="flex flex-col gap-1.5">{Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-4 w-full" />)}</div>}
+              {!topDestLoading && topDest.slice(0, 5).map((d, i) => (
+                <div key={d.airport} className="flex items-center justify-between text-xs py-0.5">
+                  <span className="text-gray-300 font-mono">{i + 1}. {d.airport}</span>
+                  <span className="text-gray-500 font-mono">{d.count}</span>
+                </div>
+              ))}
+            </div>
+          </div>
         </aside>
       </div>
 
       {/* ── Bottom Tabbed Panel ── */}
-      <div className={`shrink-0 border-t border-gray-800 bg-gray-900 flex flex-col transition-[height] duration-300 ease-in-out ${
+      <div className={`shrink-0 border-t border-gray-800 bg-gray-900 flex-col transition-[height] duration-300 ease-in-out ${
         activeTab === 'fleet' ? 'h-44' : 'h-80'
-      }`}>
+      } ${(mobileTab === 'fleet' || mobileTab === 'flights') ? 'flex' : 'hidden'} md:flex`}>
 
         {/* Tab bar */}
         <div className="flex items-center h-8 border-b border-gray-800 shrink-0">
@@ -1157,7 +1218,48 @@ export default function Dashboard() {
         {/* ── Fleet content ── */}
         {activeTab === 'fleet' && (
           <div className="overflow-y-auto flex-1">
-            <table className="w-full text-[11px]">
+            {/* Mobile card view */}
+            <div className="md:hidden divide-y divide-gray-800/50">
+              {isLoading && Array.from({ length: 4 }).map((_, i) => (
+                <div key={i} className="px-3 py-3 flex justify-between">
+                  <Skeleton className="h-4 w-16" />
+                  <Skeleton className="h-4 w-20" />
+                </div>
+              ))}
+              {!isLoading && filteredPositions.map(p => {
+                const { status: fs } = availStatus(p, lastLandingByAircraft[p.icao24] ?? null);
+                const tailColor = TAIL_COLORS[p.tail_number] ?? 'text-gray-200';
+                const fsLabel =
+                  fs === 'in_flight' ? 'En vuelo' : fs === 'stale' ? 'Sin señal' :
+                  fs === 'turning' ? 'Rotando' : fs === 'unknown' ? 'Sin datos' : 'En tierra';
+                const fsBadge =
+                  fs === 'in_flight' ? 'bg-green-900/80 text-green-300' :
+                  fs === 'stale'     ? 'bg-yellow-900/80 text-yellow-300 animate-pulse' :
+                  fs === 'turning'   ? 'bg-orange-900/80 text-orange-300' :
+                  fs === 'unknown'   ? 'bg-gray-800 text-gray-600' :
+                                      'bg-gray-700 text-gray-400';
+                return (
+                  <div key={p.icao24} className="px-3 py-2.5">
+                    <div className="flex items-center justify-between mb-1.5">
+                      <span className={`font-mono font-bold text-sm ${tailColor}`}>{p.tail_number}</span>
+                      <span className={`text-xs px-2 py-0.5 rounded font-bold uppercase ${fsBadge}`}>{fsLabel}</span>
+                    </div>
+                    <div className="flex items-center justify-between text-xs text-gray-400">
+                      <span className="font-mono text-amber-400">{p.location ?? '—'}</span>
+                      <span>{p.velocity != null ? `${Math.round(p.velocity)} km/h` : '—'}</span>
+                      <span className="text-gray-500">{relTime(p.ts)}</span>
+                    </div>
+                  </div>
+                );
+              })}
+              {!isLoading && filteredPositions.length === 0 && (
+                <div className="px-3 py-6 text-center text-gray-600 text-xs">
+                  {search || statusFilter !== 'all' ? 'No aircraft match your filters.' : 'No aircraft positions recorded yet.'}
+                </div>
+              )}
+            </div>
+            {/* Desktop table */}
+            <table className="hidden md:table w-full text-[11px]">
               <thead className="sticky top-0 bg-gray-900/95 backdrop-blur-sm z-10">
                 <tr className="text-gray-500 text-left border-b border-gray-800">
                   {['Tail', 'ICAO24', 'Status', 'Location', 'Altitude', 'Speed', 'Heading', 'Source', 'Last seen'].map(h => (
@@ -1234,8 +1336,8 @@ export default function Dashboard() {
               <button onClick={fetchFlights} className="hover:text-gray-300 transition-colors">↺ Actualizar</button>
               {flightsLoading && <span className="animate-pulse">Cargando…</span>}
             </div>
-            {/* Cards — horizontal scroll */}
-            <div className="flex-1 overflow-x-auto overflow-y-hidden">
+            {/* Cards — horizontal scroll on desktop, vertical on mobile */}
+            <div className="flex-1 overflow-x-auto overflow-y-auto md:overflow-y-hidden">
               {flightsLoading && flights.length === 0 ? (
                 <div className="flex gap-3 p-3">
                   {Array.from({ length: 6 }).map((_, i) => (
@@ -1247,7 +1349,7 @@ export default function Dashboard() {
                   No hay vuelos registrados aún.
                 </div>
               ) : (
-                <div className="flex gap-3 p-3 h-full items-center">
+                <div className="flex flex-col md:flex-row gap-3 p-3 md:h-full md:items-center">
                   {flights.map((f, i) => <FlightCard key={`${f.icao24}-${f.takeoff_ts}-${i}`} f={f} />)}
                 </div>
               )}
@@ -1260,7 +1362,7 @@ export default function Dashboard() {
           <div className="flex-1 min-h-0 overflow-y-auto px-4 py-3">
 
             {/* KPI strip */}
-            <div className="grid grid-cols-4 gap-2 mb-3">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-3">
               {([
                 { label: 'Total Flights',   value: mkpi?.total_flights,   color: 'text-white' },
                 { label: 'Takeoffs',        value: mkpi?.takeoffs,        color: 'text-green-400' },
@@ -1271,13 +1373,13 @@ export default function Dashboard() {
                   {mLoading
                     ? <Skeleton className="h-5 w-10" />
                     : <span className={`text-lg font-bold ${color}`}>{value ?? '—'}</span>}
-                  <span className="text-[9px] text-gray-500 uppercase tracking-wide leading-tight">{label}</span>
+                  <span className="text-[10px] md:text-[9px] text-gray-500 uppercase tracking-wide leading-tight">{label}</span>
                 </div>
               ))}
             </div>
 
             {/* Charts row */}
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
 
               {/* Monthly chart */}
               <div>
@@ -1341,6 +1443,33 @@ export default function Dashboard() {
         )}
 
       </div>
+
+      {/* ── Mobile bottom navigation bar ── */}
+      <nav className="mobile-bottom-nav md:hidden fixed bottom-0 left-0 right-0 h-14 bg-gray-900 border-t border-gray-800 flex items-stretch z-[2000]">
+        {([
+          { id: 'map',     label: 'Mapa',    Icon: IconMap },
+          { id: 'events',  label: 'Eventos', Icon: IconEvents },
+          { id: 'fleet',   label: 'Flota',   Icon: IconFleet },
+          { id: 'flights', label: 'Vuelos',  Icon: IconFlights },
+          { id: 'stats',   label: 'Stats',   Icon: IconStats },
+        ] as const).map(({ id, label, Icon }) => (
+          <button
+            key={id}
+            onClick={() => {
+              setMobileTab(id);
+              if (id === 'fleet')   setActiveTab('fleet');
+              if (id === 'flights') setActiveTab('flights');
+              if (id === 'stats')   setActiveTab('analytics');
+            }}
+            className={`flex-1 flex flex-col items-center justify-center gap-0.5 transition-colors ${
+              mobileTab === id ? 'text-blue-400' : 'text-gray-500 active:text-gray-300'
+            }`}
+          >
+            <Icon />
+            <span className="text-[10px] font-medium">{label}</span>
+          </button>
+        ))}
+      </nav>
     </div>
     </div>
   );
