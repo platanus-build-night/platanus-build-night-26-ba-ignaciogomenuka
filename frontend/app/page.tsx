@@ -511,7 +511,7 @@ export default function Dashboard() {
       if (!track.length) throw new Error('Sin datos de track');
       const steps: ReplayStep[] = track.map(pt => ({
         ts: pt.ts,
-        fleet_kpis: { in_air: 1, on_ground: 5, seen_last_15m: 1, events_last_hour: 0 },
+        fleet_kpis: { in_air: 1, on_ground: PLANES.length - 1, seen_last_15m: 1, events_last_hour: 0 },
         latest_positions: [{
           tail_number: flight.tail_number,
           icao24:      flight.icao24,

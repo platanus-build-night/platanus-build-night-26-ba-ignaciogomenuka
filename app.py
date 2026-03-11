@@ -303,8 +303,6 @@ def check_flights():
     planes_info = []
 
     current_timestamp = datetime.now().timestamp()
-    print(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} - Checking OpenSky Network...")
-    opensky_results = check_opensky()
 
     # Snapshot shared state before any I/O so we work on a stable local copy.
     with _state_lock:
@@ -312,6 +310,9 @@ def check_flights():
         local_last_seen = dict(last_seen)
         local_active    = set(active_planes)
         local_notified  = set(notified_planes)
+
+    print(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} - Checking OpenSky Network...")
+    opensky_results = check_opensky()
 
     for icao24, registration in PLANES.items():
         if icao24 in opensky_results:
@@ -780,7 +781,7 @@ def replay_flight():
             on_ground = (i == 0) or (i == N - 1)
             steps.append({
                 "ts": ts_iso,
-                "fleet_kpis": {"in_air": 1, "on_ground": 5, "seen_last_15m": 1, "events_last_hour": 0},
+                "fleet_kpis": {"in_air": 1, "on_ground": len(PLANES) - 1, "seen_last_15m": 1, "events_last_hour": 0},
                 "latest_positions": [{
                     "tail_number": tail,
                     "icao24":      icao_str,
@@ -854,7 +855,10 @@ def analytics_top_destinations():
 
 @app.route('/api/flight-board')
 def api_flight_board():
-    limit = min(int(request.args.get('limit', 40)), 100)
+    try:
+        limit = min(int(request.args.get('limit', 40)), 100)
+    except ValueError:
+        return jsonify({"error": "Invalid limit parameter"}), 400
     icao24 = request.args.get('icao24') or None
     try:
         with get_db() as conn:
