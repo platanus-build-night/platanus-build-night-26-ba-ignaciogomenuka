@@ -581,7 +581,7 @@ export default function Dashboard() {
       const data = await res.json();
       setFlights(data.flights ?? []);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Error loading flights');
+      console.error('fetchFlights error:', e instanceof Error ? e.message : e);
     } finally { setFlightsLoading(false); }
   }, []);
 

@@ -31,10 +31,10 @@ PLANES = {
 active_planes = set()
 notified_planes = set()
 last_seen = {}
-on_ground_state = {}
 LANDING_GRACE_PERIOD = 600
 APPEARED_THRESHOLD = 7200  # 2 hours
 _state_lock = threading.Lock()
+_check_lock = threading.Lock()
 
 
 def get_db():
@@ -298,7 +298,7 @@ def check_opensky():
 
 
 def check_flights():
-    global active_planes, last_seen, notified_planes, on_ground_state
+    global active_planes, last_seen, notified_planes
     currently_flying = set()
     planes_info = []
 
@@ -312,7 +312,6 @@ def check_flights():
         local_last_seen = dict(last_seen)
         local_active    = set(active_planes)
         local_notified  = set(notified_planes)
-    local_on_ground: dict = {}
 
     for icao24, registration in PLANES.items():
         if icao24 in opensky_results:
@@ -413,8 +412,6 @@ def check_flights():
         if squawk in ("7700", "7600", "7500"):
             save_flight_event(icao24, "emergency", {"squawk": squawk})
 
-        local_on_ground[registration] = plane_data.get("on_ground", False)
-
     planes_to_remove = []
     for plane in local_active - currently_flying:
         if plane in local_last_seen:
@@ -440,7 +437,6 @@ def check_flights():
         active_planes   = currently_flying
         last_seen       = local_last_seen
         notified_planes = local_notified
-        on_ground_state = local_on_ground
 
     print(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} - Verificación completada. Aviones en vuelo: {len(currently_flying)}")
     return planes_info
@@ -449,7 +445,8 @@ def check_flights():
 def monitor_flights():
     while True:
         try:
-            check_flights()
+            with _check_lock:
+                check_flights()
         except Exception as e:
             print(f"monitor_flights: unhandled error in check_flights(): {e}")
         time.sleep(25)
@@ -884,7 +881,8 @@ def api_flight_track(icao24):
 
 @app.route('/api/check')
 def api_check():
-    planes_info = check_flights()
+    with _check_lock:
+        planes_info = check_flights()
     return jsonify({
         "timestamp": datetime.now().isoformat(),
         "planes_monitoreados": PLANES,
@@ -904,11 +902,13 @@ def api_history():
 
 @app.route('/status')
 def status():
+    with _state_lock:
+        active = list(active_planes)
     return jsonify({
         "status": "running",
         "service": "Flight Monitor v4.0 - Supabase",
         "planes_monitoreados": PLANES,
-        "planes_activos": list(active_planes),
+        "planes_activos": active,
         "sources": ["ADSB.one (primary)", "OpenSky Network (backup)"],
         "timestamp": datetime.now().isoformat()
     })
