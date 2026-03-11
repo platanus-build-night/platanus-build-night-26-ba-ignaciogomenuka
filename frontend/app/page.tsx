@@ -457,10 +457,10 @@ export default function Dashboard() {
       setSnapshot(data);
       setFreshness(data.data_freshness_seconds);
       setError(null);
-      setIsLoading(false);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Unknown error');
     } finally {
+      setIsLoading(false);
       setRefreshing(false);
     }
   }, []);
@@ -511,7 +511,7 @@ export default function Dashboard() {
       if (!track.length) throw new Error('Sin datos de track');
       const steps: ReplayStep[] = track.map(pt => ({
         ts: pt.ts,
-        fleet_kpis: { in_air: 1, on_ground: 5, seen_last_15m: 1, events_last_hour: 0 },
+        fleet_kpis: { in_air: 1, on_ground: PLANES.length - 1, seen_last_15m: 1, events_last_hour: 0 },
         latest_positions: [{
           tail_number: flight.tail_number,
           icao24:      flight.icao24,
@@ -580,8 +580,9 @@ export default function Dashboard() {
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       setFlights(data.flights ?? []);
-    } catch { /* silent */ }
-    finally { setFlightsLoading(false); }
+    } catch (e) {
+      console.error('fetchFlights error:', e instanceof Error ? e.message : e);
+    } finally { setFlightsLoading(false); }
   }, []);
 
   useEffect(() => {
@@ -1095,7 +1096,7 @@ export default function Dashboard() {
           {/* Per-aircraft cards */}
           <div className="flex-1 overflow-y-auto">
             {isLoading
-              ? Array.from({ length: 5 }).map((_, i) => (
+              ? Array.from({ length: 6 }).map((_, i) => (
                   <div key={i} className="px-3 py-2.5 border-b border-gray-800">
                     <div className="flex justify-between mb-1.5">
                       <Skeleton className="h-4 w-16" />

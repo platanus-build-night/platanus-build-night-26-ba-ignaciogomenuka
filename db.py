@@ -246,7 +246,7 @@ def get_replay_range(conn, start_dt, end_dt, step_seconds, aircraft_icao24=None)
             "ts": current.isoformat(),
             "fleet_kpis": {
                 "in_air": seen_15m,
-                "on_ground": 5 - seen_15m,
+                "on_ground": 6 - seen_15m,
                 "seen_last_15m": seen_15m,
                 "events_last_hour": events_1h,
             },

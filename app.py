@@ -31,9 +31,10 @@ PLANES = {
 active_planes = set()
 notified_planes = set()
 last_seen = {}
-on_ground_state = {}
 LANDING_GRACE_PERIOD = 600
 APPEARED_THRESHOLD = 7200  # 2 hours
+_state_lock = threading.Lock()
+_check_lock = threading.Lock()
 
 
 def get_db():
@@ -276,7 +277,7 @@ def check_opensky():
                 icao24 = state[0].lower() if state[0] else None
                 if icao24 in PLANES:
                     vertical_ms = state[11] if state[11] is not None else None
-                    baro_rate_fpm = round(vertical_ms * 196.85) if vertical_ms else "N/A"
+                    baro_rate_fpm = round(vertical_ms * 196.85) if vertical_ms is not None else "N/A"
                     results[icao24] = {
                         "icao24": icao24,
                         "callsign": state[1].strip() if state[1] else "",
@@ -297,11 +298,19 @@ def check_opensky():
 
 
 def check_flights():
-    global active_planes, last_seen, notified_planes, on_ground_state
+    global active_planes, last_seen, notified_planes
     currently_flying = set()
     planes_info = []
 
     current_timestamp = datetime.now().timestamp()
+
+    # Snapshot shared state before any I/O so we work on a stable local copy.
+    with _state_lock:
+        prev_last_seen  = dict(last_seen)
+        local_last_seen = dict(last_seen)
+        local_active    = set(active_planes)
+        local_notified  = set(notified_planes)
+
     print(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} - Checking OpenSky Network...")
     opensky_results = check_opensky()
 
@@ -311,7 +320,7 @@ def check_flights():
             plane_data = opensky_results[icao24]
             plane_data["callsign"] = registration
             planes_info.append(plane_data)
-            last_seen[registration] = current_timestamp
+            local_last_seen[registration] = current_timestamp
             save_position(icao24, plane_data)
             print(f"  Found {registration} via OpenSky")
 
@@ -325,7 +334,7 @@ def check_flights():
                         currently_flying.add(registration)
                         plane_data["callsign"] = registration
                         planes_info.append(plane_data)
-                        last_seen[registration] = current_timestamp
+                        local_last_seen[registration] = current_timestamp
                         save_position(icao24, plane_data)
                         print(f"  Found {registration} via ADSB.one")
                 except Exception as e:
@@ -336,7 +345,7 @@ def check_flights():
         registration = plane_data["callsign"]
         icao24 = plane_data["icao24"]
 
-        if registration not in active_planes:
+        if registration not in local_active:
             # Skip ground movements misdetected as takeoffs (altitude < 500ft AND velocity < 80km/h)
             alt = plane_data.get("altitude", "N/A")
             vel = plane_data.get("velocity", "N/A")
@@ -345,11 +354,11 @@ def check_flights():
             is_airborne = (alt_num is not None and alt_num > 500) or (vel_num is not None and vel_num > 80)
             if not is_airborne:
                 print(f"  Skipping ground movement for {registration}: alt={alt}, vel={vel}")
-                active_planes.add(registration)   # track it so we don't re-evaluate next cycle
+                local_active.add(registration)   # track it so we don't re-evaluate next cycle
                 continue
 
             altitude_unit = "m" if plane_data["source"] == "OpenSky" else "ft"
-            is_in_progress = registration in notified_planes
+            is_in_progress = registration in local_notified
             event_icon = "🔄" if is_in_progress else "✈️"
             event_type = "en curso" if is_in_progress else "despegó"
 
@@ -381,7 +390,7 @@ def check_flights():
             msg += f"🕐 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
 
             notify_telegram(msg)
-            notified_planes.add(registration)
+            local_notified.add(registration)
 
             save_flight_event(icao24, "in_progress" if is_in_progress else "takeoff", {
                 "icao24": icao24,
@@ -392,8 +401,8 @@ def check_flights():
                 "source": plane_data["source"]
             })
 
-        # APPEARED: plane not seen for > 2h
-        prev_ts = last_seen.get(registration)
+        # APPEARED: use prev_last_seen (before we updated it this cycle) so the gap is real
+        prev_ts = prev_last_seen.get(registration)
         if prev_ts and (current_timestamp - prev_ts) > APPEARED_THRESHOLD:
             gap_h = int((current_timestamp - prev_ts) / 3600)
             save_flight_event(icao24, "appeared", {"gap_seconds": int(current_timestamp - prev_ts)})
@@ -404,12 +413,10 @@ def check_flights():
         if squawk in ("7700", "7600", "7500"):
             save_flight_event(icao24, "emergency", {"squawk": squawk})
 
-        on_ground_state[registration] = plane_data.get("on_ground", False)
-
     planes_to_remove = []
-    for plane in active_planes - currently_flying:
-        if plane in last_seen:
-            time_since_seen = current_timestamp - last_seen[plane]
+    for plane in local_active - currently_flying:
+        if plane in local_last_seen:
+            time_since_seen = current_timestamp - local_last_seen[plane]
             if time_since_seen < LANDING_GRACE_PERIOD:
                 print(f"  {plane} no detectado, pero dentro del período de gracia ({int(time_since_seen)}s < {LANDING_GRACE_PERIOD}s)")
                 currently_flying.add(plane)
@@ -423,17 +430,26 @@ def check_flights():
         planes_to_remove.append(plane)
 
     for plane in planes_to_remove:
-        notified_planes.discard(plane)
-        last_seen.pop(plane, None)
+        local_notified.discard(plane)
+        local_last_seen.pop(plane, None)
 
-    active_planes = currently_flying
+    # Commit updated state atomically
+    with _state_lock:
+        active_planes   = currently_flying
+        last_seen       = local_last_seen
+        notified_planes = local_notified
+
     print(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} - Verificación completada. Aviones en vuelo: {len(currently_flying)}")
     return planes_info
 
 
 def monitor_flights():
     while True:
-        check_flights()
+        try:
+            with _check_lock:
+                check_flights()
+        except Exception as e:
+            print(f"monitor_flights: unhandled error in check_flights(): {e}")
         time.sleep(25)
 
 
@@ -599,7 +615,10 @@ def replay_snapshot():
 def replay_range():
     start_str = request.args.get('start')
     end_str   = request.args.get('end')
-    step_s    = max(30, min(int(request.args.get('step_seconds', 60)), 3600))
+    try:
+        step_s = max(30, min(int(request.args.get('step_seconds', 60)), 3600))
+    except ValueError:
+        return jsonify({"error": "invalid step_seconds"}), 400
     if not start_str or not end_str:
         return jsonify({"error": "start and end required"}), 400
     try:
@@ -762,7 +781,7 @@ def replay_flight():
             on_ground = (i == 0) or (i == N - 1)
             steps.append({
                 "ts": ts_iso,
-                "fleet_kpis": {"in_air": 1, "on_ground": 5, "seen_last_15m": 1, "events_last_hour": 0},
+                "fleet_kpis": {"in_air": 1, "on_ground": len(PLANES) - 1, "seen_last_15m": 1, "events_last_hour": 0},
                 "latest_positions": [{
                     "tail_number": tail,
                     "icao24":      icao_str,
@@ -836,7 +855,10 @@ def analytics_top_destinations():
 
 @app.route('/api/flight-board')
 def api_flight_board():
-    limit = min(int(request.args.get('limit', 40)), 100)
+    try:
+        limit = min(int(request.args.get('limit', 40)), 100)
+    except ValueError:
+        return jsonify({"error": "Invalid limit parameter"}), 400
     icao24 = request.args.get('icao24') or None
     try:
         with get_db() as conn:
@@ -863,7 +885,8 @@ def api_flight_track(icao24):
 
 @app.route('/api/check')
 def api_check():
-    planes_info = check_flights()
+    with _check_lock:
+        planes_info = check_flights()
     return jsonify({
         "timestamp": datetime.now().isoformat(),
         "planes_monitoreados": PLANES,
@@ -883,11 +906,13 @@ def api_history():
 
 @app.route('/status')
 def status():
+    with _state_lock:
+        active = list(active_planes)
     return jsonify({
         "status": "running",
         "service": "Flight Monitor v4.0 - Supabase",
         "planes_monitoreados": PLANES,
-        "planes_activos": list(active_planes),
+        "planes_activos": active,
         "sources": ["ADSB.one (primary)", "OpenSky Network (backup)"],
         "timestamp": datetime.now().isoformat()
     })
