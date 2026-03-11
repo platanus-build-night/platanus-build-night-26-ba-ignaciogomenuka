@@ -43,3 +43,30 @@ Also review:
 4. Do NOT refactor working code — only fix bugs
 5. Do NOT add comments unless explaining a non-obvious fix
 6. Report every bug found with file:line and description
+
+---
+
+## Tasks
+
+### Task 1: Fix race conditions and monitor thread robustness in app.py
+
+- [x] Add threading.Lock to protect shared globals (active_planes, notified_planes, last_seen, on_ground_state)
+- [x] Acquire lock in check_flights() around all reads/writes to shared globals
+- [x] Wrap check_flights() call in monitor_flights() with try/except so thread never dies silently
+
+### Task 2: Fix logic bugs in app.py
+
+- [ ] Fix baro_rate falsy check: `if vertical_ms` → `if vertical_ms is not None` (app.py:279)
+- [x] Fix APPEARED logic: save old last_seen before updating it so the gap check is correct — fixed as part of Task 1 (prev_last_seen snapshot)
+- [ ] Add ValueError guard around step_s int() conversion in replay_range (app.py:602)
+
+### Task 3: Fix hardcoded fleet size in db.py
+
+- [ ] Fix `"on_ground": 5 - seen_15m` → `6 - seen_15m` in get_replay_range (db.py:249)
+
+### Task 4: Review and fix frontend page.tsx
+
+- [ ] Read full page.tsx and FleetMap.tsx
+- [ ] Fix any missing useEffect cleanup (interval/listener leaks)
+- [ ] Fix any missing dependency array entries in useEffect/useCallback
+- [ ] Fix any unhandled rejected fetch promises

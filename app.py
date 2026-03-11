@@ -34,6 +34,7 @@ last_seen = {}
 on_ground_state = {}
 LANDING_GRACE_PERIOD = 600
 APPEARED_THRESHOLD = 7200  # 2 hours
+_state_lock = threading.Lock()
 
 
 def get_db():
@@ -305,13 +306,21 @@ def check_flights():
     print(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} - Checking OpenSky Network...")
     opensky_results = check_opensky()
 
+    # Snapshot shared state before any I/O so we work on a stable local copy.
+    with _state_lock:
+        prev_last_seen  = dict(last_seen)
+        local_last_seen = dict(last_seen)
+        local_active    = set(active_planes)
+        local_notified  = set(notified_planes)
+    local_on_ground: dict = {}
+
     for icao24, registration in PLANES.items():
         if icao24 in opensky_results:
             currently_flying.add(registration)
             plane_data = opensky_results[icao24]
             plane_data["callsign"] = registration
             planes_info.append(plane_data)
-            last_seen[registration] = current_timestamp
+            local_last_seen[registration] = current_timestamp
             save_position(icao24, plane_data)
             print(f"  Found {registration} via OpenSky")
 
@@ -325,7 +334,7 @@ def check_flights():
                         currently_flying.add(registration)
                         plane_data["callsign"] = registration
                         planes_info.append(plane_data)
-                        last_seen[registration] = current_timestamp
+                        local_last_seen[registration] = current_timestamp
                         save_position(icao24, plane_data)
                         print(f"  Found {registration} via ADSB.one")
                 except Exception as e:
@@ -336,7 +345,7 @@ def check_flights():
         registration = plane_data["callsign"]
         icao24 = plane_data["icao24"]
 
-        if registration not in active_planes:
+        if registration not in local_active:
             # Skip ground movements misdetected as takeoffs (altitude < 500ft AND velocity < 80km/h)
             alt = plane_data.get("altitude", "N/A")
             vel = plane_data.get("velocity", "N/A")
@@ -345,11 +354,11 @@ def check_flights():
             is_airborne = (alt_num is not None and alt_num > 500) or (vel_num is not None and vel_num > 80)
             if not is_airborne:
                 print(f"  Skipping ground movement for {registration}: alt={alt}, vel={vel}")
-                active_planes.add(registration)   # track it so we don't re-evaluate next cycle
+                local_active.add(registration)   # track it so we don't re-evaluate next cycle
                 continue
 
             altitude_unit = "m" if plane_data["source"] == "OpenSky" else "ft"
-            is_in_progress = registration in notified_planes
+            is_in_progress = registration in local_notified
             event_icon = "🔄" if is_in_progress else "✈️"
             event_type = "en curso" if is_in_progress else "despegó"
 
@@ -381,7 +390,7 @@ def check_flights():
             msg += f"🕐 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
 
             notify_telegram(msg)
-            notified_planes.add(registration)
+            local_notified.add(registration)
 
             save_flight_event(icao24, "in_progress" if is_in_progress else "takeoff", {
                 "icao24": icao24,
@@ -392,8 +401,8 @@ def check_flights():
                 "source": plane_data["source"]
             })
 
-        # APPEARED: plane not seen for > 2h
-        prev_ts = last_seen.get(registration)
+        # APPEARED: use prev_last_seen (before we updated it this cycle) so the gap is real
+        prev_ts = prev_last_seen.get(registration)
         if prev_ts and (current_timestamp - prev_ts) > APPEARED_THRESHOLD:
             gap_h = int((current_timestamp - prev_ts) / 3600)
             save_flight_event(icao24, "appeared", {"gap_seconds": int(current_timestamp - prev_ts)})
@@ -404,12 +413,12 @@ def check_flights():
         if squawk in ("7700", "7600", "7500"):
             save_flight_event(icao24, "emergency", {"squawk": squawk})
 
-        on_ground_state[registration] = plane_data.get("on_ground", False)
+        local_on_ground[registration] = plane_data.get("on_ground", False)
 
     planes_to_remove = []
-    for plane in active_planes - currently_flying:
-        if plane in last_seen:
-            time_since_seen = current_timestamp - last_seen[plane]
+    for plane in local_active - currently_flying:
+        if plane in local_last_seen:
+            time_since_seen = current_timestamp - local_last_seen[plane]
             if time_since_seen < LANDING_GRACE_PERIOD:
                 print(f"  {plane} no detectado, pero dentro del período de gracia ({int(time_since_seen)}s < {LANDING_GRACE_PERIOD}s)")
                 currently_flying.add(plane)
@@ -423,17 +432,26 @@ def check_flights():
         planes_to_remove.append(plane)
 
     for plane in planes_to_remove:
-        notified_planes.discard(plane)
-        last_seen.pop(plane, None)
+        local_notified.discard(plane)
+        local_last_seen.pop(plane, None)
 
-    active_planes = currently_flying
+    # Commit updated state atomically
+    with _state_lock:
+        active_planes   = currently_flying
+        last_seen       = local_last_seen
+        notified_planes = local_notified
+        on_ground_state = local_on_ground
+
     print(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} - Verificación completada. Aviones en vuelo: {len(currently_flying)}")
     return planes_info
 
 
 def monitor_flights():
     while True:
-        check_flights()
+        try:
+            check_flights()
+        except Exception as e:
+            print(f"monitor_flights: unhandled error in check_flights(): {e}")
         time.sleep(25)
 
 
