@@ -73,3 +73,6 @@ frontend/tsconfig.tsbuildinfo
 # Misc exports
 import_telegram.sql
 telegram_export.txt
+
+# ralphex progress logs
+.ralphex/progress/
