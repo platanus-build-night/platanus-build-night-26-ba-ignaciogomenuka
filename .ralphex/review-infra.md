@@ -56,9 +56,9 @@ Also review:
 
 ### Task 2: Fix logic bugs in app.py
 
-- [ ] Fix baro_rate falsy check: `if vertical_ms` → `if vertical_ms is not None` (app.py:279)
+- [x] Fix baro_rate falsy check: `if vertical_ms` → `if vertical_ms is not None` (app.py:279)
 - [x] Fix APPEARED logic: save old last_seen before updating it so the gap check is correct — fixed as part of Task 1 (prev_last_seen snapshot)
-- [ ] Add ValueError guard around step_s int() conversion in replay_range (app.py:602)
+- [x] Add ValueError guard around step_s int() conversion in replay_range (app.py:602)
 
 ### Task 3: Fix hardcoded fleet size in db.py
 

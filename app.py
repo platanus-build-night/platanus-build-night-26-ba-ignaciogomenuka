@@ -277,7 +277,7 @@ def check_opensky():
                 icao24 = state[0].lower() if state[0] else None
                 if icao24 in PLANES:
                     vertical_ms = state[11] if state[11] is not None else None
-                    baro_rate_fpm = round(vertical_ms * 196.85) if vertical_ms else "N/A"
+                    baro_rate_fpm = round(vertical_ms * 196.85) if vertical_ms is not None else "N/A"
                     results[icao24] = {
                         "icao24": icao24,
                         "callsign": state[1].strip() if state[1] else "",
@@ -617,7 +617,10 @@ def replay_snapshot():
 def replay_range():
     start_str = request.args.get('start')
     end_str   = request.args.get('end')
-    step_s    = max(30, min(int(request.args.get('step_seconds', 60)), 3600))
+    try:
+        step_s = max(30, min(int(request.args.get('step_seconds', 60)), 3600))
+    except ValueError:
+        return jsonify({"error": "invalid step_seconds"}), 400
     if not start_str or not end_str:
         return jsonify({"error": "start and end required"}), 400
     try:
