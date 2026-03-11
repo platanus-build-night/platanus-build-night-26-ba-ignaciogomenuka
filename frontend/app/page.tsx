@@ -580,8 +580,9 @@ export default function Dashboard() {
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       setFlights(data.flights ?? []);
-    } catch { /* silent */ }
-    finally { setFlightsLoading(false); }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Error loading flights');
+    } finally { setFlightsLoading(false); }
   }, []);
 
   useEffect(() => {
@@ -1095,7 +1096,7 @@ export default function Dashboard() {
           {/* Per-aircraft cards */}
           <div className="flex-1 overflow-y-auto">
             {isLoading
-              ? Array.from({ length: 5 }).map((_, i) => (
+              ? Array.from({ length: 6 }).map((_, i) => (
                   <div key={i} className="px-3 py-2.5 border-b border-gray-800">
                     <div className="flex justify-between mb-1.5">
                       <Skeleton className="h-4 w-16" />

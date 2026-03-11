@@ -66,7 +66,7 @@ Also review:
 
 ### Task 4: Review and fix frontend page.tsx
 
-- [ ] Read full page.tsx and FleetMap.tsx
-- [ ] Fix any missing useEffect cleanup (interval/listener leaks)
-- [ ] Fix any missing dependency array entries in useEffect/useCallback
-- [ ] Fix any unhandled rejected fetch promises
+- [x] Read full page.tsx and FleetMap.tsx
+- [x] Fix any missing useEffect cleanup (interval/listener leaks)
+- [x] Fix any missing dependency array entries in useEffect/useCallback
+- [x] Fix any unhandled rejected fetch promises
