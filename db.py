@@ -62,7 +62,7 @@ def get_snapshot(conn):
         """)
         row = cur.fetchone()
         seen_last_15m = int(row["seen_last_15m"] or 0)
-        total_fleet = 5
+        total_fleet = 6
 
         fleet_kpis = {
             "in_air": seen_last_15m,
@@ -182,7 +182,7 @@ def get_snapshot_at(conn, ts):
     return {
         "fleet_kpis": {
             "in_air": seen_last_15m,
-            "on_ground": 5 - seen_last_15m,
+            "on_ground": 6 - seen_last_15m,
             "seen_last_15m": seen_last_15m,
             "events_last_hour": int(row["events_last_hour"] or 0),
         },

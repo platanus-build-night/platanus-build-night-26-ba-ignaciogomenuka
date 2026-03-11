@@ -148,6 +148,7 @@ const PLANES = [
   { icao24: 'e06546', tail: 'LV-FUF' },
   { icao24: 'e0b341', tail: 'LV-KMA' },
   { icao24: 'e0b058', tail: 'LV-KAX' },
+  { icao24: 'e07851', tail: 'LV-CPL' },
 ];
 
 // ─── Mobile nav icons (inline SVG) ────────────────────────────────────────────
@@ -194,6 +195,7 @@ const TAIL_COLORS: Record<string, string> = {
   'LV-FUF': 'text-amber-300',
   'LV-KMA': 'text-rose-300',
   'LV-KAX': 'text-violet-300',
+  'LV-CPL': 'text-pink-300',
 };
 
 function fmtTime(iso: string) {
@@ -509,7 +511,7 @@ export default function Dashboard() {
       if (!track.length) throw new Error('Sin datos de track');
       const steps: ReplayStep[] = track.map(pt => ({
         ts: pt.ts,
-        fleet_kpis: { in_air: 1, on_ground: 4, seen_last_15m: 1, events_last_hour: 0 },
+        fleet_kpis: { in_air: 1, on_ground: 5, seen_last_15m: 1, events_last_hour: 0 },
         latest_positions: [{
           tail_number: flight.tail_number,
           icao24:      flight.icao24,

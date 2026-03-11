@@ -25,6 +25,7 @@ PLANES = {
     "e06546": "LV-FUF",
     "e0b341": "LV-KMA",
     "e0b058": "LV-KAX",
+    "e07851": "LV-CPL",
 }
 
 active_planes = set()
@@ -465,7 +466,7 @@ def index():
 </head>
 <body>
     <h1>🛩️ Monitor de Vuelos Privados</h1>
-    <p>Monitoreo en tiempo real de las matrículas: LV-FVZ, LV-CCO, LV-FUF, LV-KMA, LV-KAX</p>
+    <p>Monitoreo en tiempo real de las matrículas: LV-FVZ, LV-CCO, LV-FUF, LV-KMA, LV-KAX, LV-CPL</p>
     <p style="font-size: 0.85em; color: #666;">Multi-fuente: ADSB.one + OpenSky Network | Detección vía ICAO24 Mode-S</p>
 
     <div>
@@ -761,7 +762,7 @@ def replay_flight():
             on_ground = (i == 0) or (i == N - 1)
             steps.append({
                 "ts": ts_iso,
-                "fleet_kpis": {"in_air": 1, "on_ground": 4, "seen_last_15m": 1, "events_last_hour": 0},
+                "fleet_kpis": {"in_air": 1, "on_ground": 5, "seen_last_15m": 1, "events_last_hour": 0},
                 "latest_positions": [{
                     "tail_number": tail,
                     "icao24":      icao_str,

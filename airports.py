@@ -53,6 +53,9 @@ AIRPORTS = [
     ("SAVV", "VGS", "Gobernador Virasoro",                  -28.0353, -56.0514),
     ("SAAV", "SFN", "Sauce Viejo Santa Fe",                 -31.7117, -60.8117),
     ("SAAR", "ROS", "Rosario Islas Malvinas",               -32.9036, -60.7850),
+    ("SARP", "PSS", "Posadas Libertador Gral. San Martín", -27.3670, -55.9670),
+    ("SATG", "OYA", "Goya",                                 -29.1058, -59.2189),
+    ("SARL", "AOL", "Paso de los Libres",                   -29.6894, -57.1521),
 
     # ══════════════════════════════════════════════════════════════════════════
     # ARGENTINA — Córdoba
@@ -81,6 +84,8 @@ AIRPORTS = [
     ("SANC", "CTC", "Catamarca Coronel Gustavo Vargas",     -28.5956, -65.7514),
     ("SANE", "SDE", "Santiago del Estero",                  -27.7656, -64.3100),
     ("SARF", "ORA", "Orán",                                 -23.1528, -64.3292),
+    ("SAST", "TTG", "Tartagal General Enrique Mosconi",     -22.6168, -63.7930),
+    ("SASM", "MTN", "Metán",                                -25.5144, -64.9656),
 
     # ══════════════════════════════════════════════════════════════════════════
     # ARGENTINA — Neuquén / Río Negro (norpatagonia, esquí, estancias)
@@ -91,7 +96,7 @@ AIRPORTS = [
     ("SAVB", "BRC", "Bariloche Teniente Candelaria",        -41.1512, -71.1578),
     ("SAPM", "CPC", "Chapelco San Martín de los Andes",    -40.0752, -71.1372),
     ("SAVT", "VDM", "Viedma Gov Castello",                  -40.8692, -63.0004),
-    ("SAAG", "GNR", "General Roca",                         -39.0006, -67.6205),
+    ("SAVR", "GNR", "General Roca",                         -39.0006, -67.6205),
 
     # ══════════════════════════════════════════════════════════════════════════
     # ARGENTINA — Patagonia (Chubut, Santa Cruz, Tierra del Fuego)
@@ -169,7 +174,7 @@ AIRPORTS = [
     ("SPTN", "TCQ", "Tacna Coronel FAP C. Ciriani",        -18.0533, -70.2758),
     ("SPPY", "IQT", "Iquitos C.F.A.P. Francisco Secada",   -3.7847, -73.3088),
     ("SPCL", "PCL", "Pucallpa Capitán David Abenzur",       -8.3779, -74.5743),
-    ("SPTN", "PIU", "Piura Cap. FAP G. Concha Iberico",    -5.2075, -80.6164),
+    ("SPUR", "PIU", "Piura Cap. FAP G. Concha Iberico",    -5.2075, -80.6164),
     ("SPHI", "TRU", "Trujillo Cap. FAP C. Martínez de P.", -8.0814, -79.1088),
     ("SPNC", "HUU", "Tingo María",                          -9.8760, -76.0047),
 
