@@ -62,7 +62,7 @@ Also review:
 
 ### Task 3: Fix hardcoded fleet size in db.py
 
-- [ ] Fix `"on_ground": 5 - seen_15m` → `6 - seen_15m` in get_replay_range (db.py:249)
+- [x] Fix `"on_ground": 5 - seen_15m` → `6 - seen_15m` in get_replay_range (db.py:249)
 
 ### Task 4: Review and fix frontend page.tsx
 
