@@ -457,10 +457,10 @@ export default function Dashboard() {
       setSnapshot(data);
       setFreshness(data.data_freshness_seconds);
       setError(null);
-      setIsLoading(false);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Unknown error');
     } finally {
+      setIsLoading(false);
       setRefreshing(false);
     }
   }, []);
