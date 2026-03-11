@@ -64,3 +64,12 @@ platanus-build-night-26-ba-ignaciogomenuka/
 frontend/.next/
 frontend/node_modules/
 frontend/.env.local
+
+# Next.js build artifacts
+frontend/next-env.d.ts
+frontend/package-lock.json
+frontend/tsconfig.tsbuildinfo
+
+# Misc exports
+import_telegram.sql
+telegram_export.txt
