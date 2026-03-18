@@ -2,19 +2,25 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Leaflet popup dark theme override */
-.leaflet-popup-content-wrapper {
-  background: #1e293b;
-  color: #e2e8f0;
-  border: 1px solid #334155;
-  border-radius: 6px;
+/* MapLibre popup reset — transparent shell, content card is self-styled */
+.maplibregl-popup-content {
+  background: transparent !important;
+  padding: 0 !important;
+  border: none !important;
+  box-shadow: none !important;
 }
-.leaflet-popup-tip {
-  background: #1e293b;
+.maplibregl-popup-tip {
+  display: none !important;
 }
-.leaflet-popup-content {
-  margin: 8px 12px;
-  line-height: 1.6;
+.fleet-popup .maplibregl-popup-content {
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+/* Airborne pulse ring animation */
+@keyframes fleet-pulse {
+  0%, 100% { opacity: 0.7; transform: scale(1); }
+  50%       { opacity: 0.15; transform: scale(1.4); }
 }
 
 /* iOS safe area inset for bottom nav */
