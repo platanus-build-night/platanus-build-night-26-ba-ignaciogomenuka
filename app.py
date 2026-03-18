@@ -8,10 +8,14 @@ import psycopg2
 import psycopg2.extras
 from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
-from db import get_snapshot, has_recent_event, get_last_seen_from_db, get_snapshot_at, get_replay_range, get_flight_board, get_flight_track
+from db import (get_snapshot, has_recent_event, get_last_seen_from_db,
+                get_snapshot_at, get_replay_range, get_flight_board, get_flight_track,
+                nearest_airport_db, log_unknown_airport,
+                sync_takeoff_to_flights, sync_landing_to_flights,
+                cleanup_stale_flights, promote_unknown_airports,
+                get_unknown_airport_candidates)
 from forecast import get_forecast
 from analytics import get_monthly_analytics, get_top_destinations
-from airports import nearest_airport
 
 load_dotenv()
 
@@ -35,6 +39,7 @@ LANDING_GRACE_PERIOD = 600
 APPEARED_THRESHOLD = 7200  # 2 hours
 _state_lock = threading.Lock()
 _check_lock = threading.Lock()
+_last_maintenance = 0
 
 
 def get_db():
@@ -98,7 +103,7 @@ def save_flight_event(icao24, event_type, data=None):
                     return
                 meta = dict(data or {})
 
-                if event_type.upper() == "TAKEOFF":
+                if event_type.upper() in ("TAKEOFF", "IN_PROGRESS"):
                     # Prefer lowest-altitude DB position (nearest to runway) over detection-moment lat/lon
                     cur.execute("""
                         SELECT lat, lon FROM positions
@@ -117,12 +122,13 @@ def save_flight_event(icao24, event_type, data=None):
                         lon = float(lon) if lon is not None else None
 
                     if lat is not None and lon is not None:
-                        apt = nearest_airport(lat, lon)
+                        apt = nearest_airport_db(cur, lat, lon)
                         if apt:
                             meta["origin_airport"] = apt["iata"]
                             meta["origin_name"]    = apt["name"]
                         else:
                             meta["origin_airport"] = "UNKNOWN"
+                            log_unknown_airport(cur, lat, lon, "TAKEOFF_ORIGIN")
                     else:
                         # Fallback: use the destination of the previous landing as origin
                         cur.execute("""
@@ -153,16 +159,32 @@ def save_flight_event(icao24, event_type, data=None):
                     """, (aircraft_id,))
                     pos = cur.fetchone()
                     if pos:
-                        apt = nearest_airport(pos["lat"], pos["lon"])
+                        apt = nearest_airport_db(cur, float(pos["lat"]), float(pos["lon"]))
                         meta["destination_airport"] = apt["iata"] if apt else "UNKNOWN"
                         if apt:
                             meta["destination_name"] = apt["name"]
+                        else:
+                            log_unknown_airport(cur, float(pos["lat"]), float(pos["lon"]), "LANDING_DEST")
                     else:
                         meta["destination_airport"] = "UNKNOWN"
+
                 cur.execute("""
                     INSERT INTO events (aircraft_id, type, meta)
                     VALUES (%s, %s, %s)
+                    RETURNING ts
                 """, (aircraft_id, event_type.upper(), json.dumps(meta)))
+                event_ts = cur.fetchone()["ts"]
+
+                # Keep flights table live
+                if event_type.upper() in ("TAKEOFF", "IN_PROGRESS"):
+                    sync_takeoff_to_flights(cur, aircraft_id, event_ts,
+                                            meta.get("origin_airport"),
+                                            meta.get("source"))
+                elif event_type.upper() == "LANDING":
+                    sync_landing_to_flights(cur, aircraft_id, event_ts,
+                                            meta.get("destination_airport"),
+                                            meta.get("source"))
+
     except Exception as e:
         print(f"Error saving event: {e}")
 
@@ -444,12 +466,29 @@ def check_flights():
 
 
 def monitor_flights():
+    global _last_maintenance
     while True:
         try:
             with _check_lock:
                 check_flights()
         except Exception as e:
             print(f"monitor_flights: unhandled error in check_flights(): {e}")
+
+        # Run maintenance every ~10 minutes
+        now = time.time()
+        if now - _last_maintenance > 600:
+            try:
+                with get_db() as conn:
+                    stale = cleanup_stale_flights(conn)
+                    promoted = promote_unknown_airports(conn)
+                    if stale:
+                        print(f"[maintenance] {stale} stale in_flight rows → incomplete")
+                    if promoted:
+                        print(f"[maintenance] {promoted} unknown airport candidates → review")
+            except Exception as e:
+                print(f"[maintenance] error: {e}")
+            _last_maintenance = now
+
         time.sleep(25)
 
 
@@ -687,12 +726,14 @@ def _alt_profile(n, cruise_ft):
 
 @app.route('/replay/flight')
 def replay_flight():
-    from airports import AIRPORTS, haversine
     icao24 = request.args.get('icao24')
+    ORIGIN_LAT, ORIGIN_LON = -34.5592, -58.4156  # SABE — home base
+
     try:
+        ev = apt_row = None
+
         with get_db() as conn:
             with conn.cursor() as cur:
-                # Find last TAKEOFF + matching LANDING within 12 hours
                 q = """
                     SELECT
                         t.ts         AS takeoff_ts,
@@ -722,63 +763,60 @@ def replay_flight():
                 cur.execute(q, params)
                 ev = cur.fetchone()
 
+                if ev:
+                    velocity_kmh = float(ev['velocity_kmh'] or 600)
+                    raw_alt      = float(ev['cruise_alt_m'] or 10000)
+                    # ADSB.one → feet; OpenSky → metres. Values > 5000 are already feet.
+                    cruise_ft = raw_alt if raw_alt > 5000 else raw_alt * 3.28084
+
+                    if ev['landing_ts']:
+                        duration_s = (ev['landing_ts'] - ev['takeoff_ts']).total_seconds()
+                    else:
+                        duration_s = 3600
+                    dist_km = velocity_kmh * (duration_s / 3600)
+
+                    # DB-backed destination matching: try ±35% tolerance, fallback to closest
+                    cur.execute("""
+                        WITH distances AS (
+                            SELECT iata, name, lat, lon,
+                                   (6371 * acos(LEAST(1.0,
+                                       cos(radians(%s)) * cos(radians(lat)) * cos(radians(lon) - radians(%s))
+                                       + sin(radians(%s)) * sin(radians(lat))
+                                   ))) AS dist_km
+                            FROM airports
+                        )
+                        SELECT iata, name, lat, lon, dist_km
+                        FROM distances
+                        WHERE dist_km > 20
+                        ORDER BY
+                            CASE WHEN ABS(dist_km - %s) < %s * 0.35 THEN 0 ELSE 1 END ASC,
+                            ABS(dist_km - %s) ASC
+                        LIMIT 1
+                    """, (ORIGIN_LAT, ORIGIN_LON, ORIGIN_LAT, dist_km, dist_km, dist_km))
+                    apt_row = cur.fetchone()
+
         if not ev:
             return jsonify({"error": "No suitable flight found"}), 404
+        if not apt_row:
+            return jsonify({"error": "No destination airport found"}), 404
 
-        takeoff_ts   = ev['takeoff_ts']
-        landing_ts   = ev['landing_ts']
-        tail         = ev['tail_number']
-        icao_str     = ev['icao24']
-        velocity_kmh = float(ev['velocity_kmh'] or 600)
-        raw_alt      = float(ev['cruise_alt_m'] or 10000)
-        # ADSB.one stores altitude in feet; OpenSky stores in metres.
-        # Heuristic: values > 5000 are already feet (no jet cruises at 5000m).
-        cruise_ft    = raw_alt if raw_alt > 5000 else raw_alt * 3.28084
+        takeoff_ts = ev['takeoff_ts']
+        tail       = ev['tail_number']
+        icao_str   = ev['icao24']
+        dest_lat, dest_lon = float(apt_row["lat"]), float(apt_row["lon"])
+        dest_iata, dest_name = apt_row["iata"], apt_row["name"]
 
-        # Duration and approximate distance
-        if landing_ts:
-            duration_s = (landing_ts - takeoff_ts).total_seconds()
-        else:
-            duration_s = 3600  # fallback: 1h
-        dist_km = velocity_kmh * (duration_s / 3600)
-
-        # Origin: Buenos Aires Aeroparque (home base for all 5 planes)
-        ORIGIN_LAT, ORIGIN_LON = -34.5592, -58.4156  # SABE
-
-        # Find closest airport matching the flight distance (±30% tolerance)
-        best_apt, best_diff = None, float('inf')
-        for icao, iata, name, alat, alon in AIRPORTS:
-            d = haversine(ORIGIN_LAT, ORIGIN_LON, alat, alon)
-            if d < 20:      # skip Buenos Aires airports as destination
-                continue
-            diff = abs(d - dist_km)
-            if diff < best_diff and diff < dist_km * 0.35:
-                best_diff = diff
-                best_apt  = (alat, alon, iata, name)
-
-        if not best_apt:
-            # fallback: pick airport closest to the calculated distance regardless of tolerance
-            best_apt = min(
-                [(alat, alon, iata, name) for _, iata, name, alat, alon in AIRPORTS
-                 if haversine(ORIGIN_LAT, ORIGIN_LON, alat, alon) > 20],
-                key=lambda a: abs(haversine(ORIGIN_LAT, ORIGIN_LON, a[0], a[1]) - dist_km)
-            )
-
-        dest_lat, dest_lon, dest_iata, dest_name = best_apt
-
-        N     = min(max(int(duration_s / 30), 40), 120)   # ~1 step per 30s, 40-120 steps
-        pts   = _gc_points(ORIGIN_LAT, ORIGIN_LON, dest_lat, dest_lon, N)
-        alts  = _alt_profile(N, cruise_ft)
-        dt    = duration_s / (N - 1)
+        N    = min(max(int(duration_s / 30), 40), 120)
+        pts  = _gc_points(ORIGIN_LAT, ORIGIN_LON, dest_lat, dest_lon, N)
+        alts = _alt_profile(N, cruise_ft)
+        dt   = duration_s / (N - 1)
 
         steps = []
         for i, (lat, lon) in enumerate(pts):
             ts     = takeoff_ts + timedelta(seconds=i * dt)
             ts_iso = ts.isoformat()
-            # Heading from this point to next
-            nxt = pts[i + 1] if i + 1 < N else pts[-1]
-            hdg = _bearing(lat, lon, nxt[0], nxt[1])
-            on_ground = (i == 0) or (i == N - 1)
+            nxt    = pts[i + 1] if i + 1 < N else pts[-1]
+            hdg    = _bearing(lat, lon, nxt[0], nxt[1])
             steps.append({
                 "ts": ts_iso,
                 "fleet_kpis": {"in_air": 1, "on_ground": len(PLANES) - 1, "seen_last_15m": 1, "events_last_hour": 0},
@@ -791,21 +829,21 @@ def replay_flight():
                     "altitude":    round(alts[i]),
                     "velocity":    round(velocity_kmh),
                     "heading":     round(hdg, 1),
-                    "on_ground":   on_ground,
+                    "on_ground":   (i == 0) or (i == N - 1),
                     "source":      "synthesized",
                 }],
                 "last_50_events": [],
             })
 
         return jsonify({
-            "tail_number":   tail,
-            "icao24":        icao_str,
-            "origin":        "SABE",
-            "destination":   dest_iata,
+            "tail_number":      tail,
+            "icao24":           icao_str,
+            "origin":           "SABE",
+            "destination":      dest_iata,
             "destination_name": dest_name,
-            "duration_min":  round(duration_s / 60, 1),
-            "distance_km":   round(dist_km),
-            "steps":         steps,
+            "duration_min":     round(duration_s / 60, 1),
+            "distance_km":      round(dist_km),
+            "steps":            steps,
         })
 
     except Exception as e:
@@ -863,6 +901,20 @@ def api_flight_board():
     try:
         with get_db() as conn:
             return jsonify(get_flight_board(conn, limit, icao24))
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/unknown-airports')
+def api_unknown_airports():
+    status = request.args.get('status', 'pending')
+    try:
+        limit = min(int(request.args.get('limit', 50)), 200)
+    except ValueError:
+        return jsonify({"error": "Invalid limit parameter"}), 400
+    try:
+        with get_db() as conn:
+            return jsonify(get_unknown_airport_candidates(conn, status, limit))
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 

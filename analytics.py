@@ -19,18 +19,18 @@ def get_monthly_analytics(conn, start_date=None, end_date=None,
     start_date, end_date = _defaults(start_date, end_date)
     filters_applied      = _filters(start_date, end_date, operator_name, watchlist_id, aircraft_id)
 
-    extra       = " AND e.aircraft_id = (SELECT id FROM aircraft WHERE icao24 = %s)" if aircraft_id else ""
+    extra       = " AND f.aircraft_id = (SELECT id FROM aircraft WHERE icao24 = %s)" if aircraft_id else ""
     base_params = [start_date, end_date] + ([aircraft_id] if aircraft_id else [])
 
     with conn.cursor() as cur:
         cur.execute(f"""
             SELECT
-                TO_CHAR(DATE_TRUNC('month', e.ts), 'YYYY-MM') AS month,
-                COUNT(*) FILTER (WHERE e.type = 'TAKEOFF') AS takeoffs,
-                COUNT(*) FILTER (WHERE e.type = 'LANDING') AS landings
-            FROM events e
-            WHERE e.ts >= %s AND e.ts <= %s
-              AND e.type IN ('TAKEOFF', 'LANDING')
+                TO_CHAR(DATE_TRUNC('month', f.departure_time), 'YYYY-MM') AS month,
+                COUNT(*)                                                    AS takeoffs,
+                COUNT(*) FILTER (WHERE f.arrival_time IS NOT NULL)         AS landings
+            FROM flights f
+            WHERE f.departure_time >= %s AND f.departure_time <= %s
+              AND f.confidence_score > 0.3
               {extra}
             GROUP BY 1
             ORDER BY 1
@@ -38,10 +38,10 @@ def get_monthly_analytics(conn, start_date=None, end_date=None,
         monthly_rows = cur.fetchall()
 
         cur.execute(f"""
-            SELECT COUNT(DISTINCT e.aircraft_id) AS active_aircraft
-            FROM events e
-            WHERE e.ts >= %s AND e.ts <= %s
-              AND e.type = 'TAKEOFF'
+            SELECT COUNT(DISTINCT f.aircraft_id) AS active_aircraft
+            FROM flights f
+            WHERE f.departure_time >= %s AND f.departure_time <= %s
+              AND f.confidence_score > 0.3
               {extra}
         """, base_params)
         active_row = cur.fetchone()
@@ -55,7 +55,6 @@ def get_monthly_analytics(conn, start_date=None, end_date=None,
         }
         for r in monthly_rows
     ]
-
     total_takeoffs = sum(r["takeoffs"] for r in monthly_series)
     total_landings = sum(r["landings"] for r in monthly_series)
 
@@ -76,20 +75,21 @@ def get_top_destinations(conn, start_date=None, end_date=None,
     start_date, end_date = _defaults(start_date, end_date)
     filters_applied      = _filters(start_date, end_date, operator_name, watchlist_id, aircraft_id)
 
-    extra       = " AND e.aircraft_id = (SELECT id FROM aircraft WHERE icao24 = %s)" if aircraft_id else ""
+    extra       = " AND f.aircraft_id = (SELECT id FROM aircraft WHERE icao24 = %s)" if aircraft_id else ""
     base_params = [start_date, end_date] + ([aircraft_id] if aircraft_id else [])
 
     with conn.cursor() as cur:
         cur.execute(f"""
             SELECT
-                e.meta->>'destination_airport' AS airport,
-                e.meta->>'destination_name'    AS name,
-                COUNT(*)                        AS count
-            FROM events e
-            WHERE e.ts >= %s AND e.ts <= %s
-              AND e.type = 'LANDING'
-              AND e.meta->>'destination_airport' IS NOT NULL
-              AND e.meta->>'destination_airport' <> 'UNKNOWN'
+                COALESCE(arr.iata, f.arrival_label_raw) AS airport,
+                COALESCE(arr.name, f.arrival_label_raw) AS name,
+                COUNT(*)                                 AS count
+            FROM flights f
+            LEFT JOIN airports arr ON arr.id = f.arrival_airport_id
+            WHERE f.departure_time >= %s AND f.departure_time <= %s
+              AND f.status = 'landed'
+              AND f.arrival_label_raw IS NOT NULL
+              AND f.arrival_label_raw <> 'UNKNOWN'
               {extra}
             GROUP BY 1, 2
             ORDER BY 3 DESC

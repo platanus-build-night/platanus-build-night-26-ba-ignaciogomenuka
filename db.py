@@ -1,54 +1,158 @@
 import json
 from datetime import timedelta
-from airports import nearest_airport, nearest_airport_on_ground
+from collections import defaultdict
 
+
+# =============================================================================
+# Airport helpers — DB-backed, replaces airports.py for all runtime lookups
+# =============================================================================
+
+def nearest_airport_db(cur, lat, lon, radius_km=50, on_ground=False):
+    """Return nearest airport within radius_km, or None.
+    Uses 150 km radius when on_ground to cover remote strips with weak ADS-B."""
+    if lat is None or lon is None:
+        return None
+    limit_km = 150.0 if on_ground else float(radius_km)
+    cur.execute("""
+        SELECT iata, name, lat, lon,
+               (6371 * acos(LEAST(1.0,
+                   cos(radians(%s)) * cos(radians(lat)) * cos(radians(lon) - radians(%s))
+                   + sin(radians(%s)) * sin(radians(lat))
+               ))) AS dist_km
+        FROM airports
+        ORDER BY dist_km ASC
+        LIMIT 1
+    """, (lat, lon, lat))
+    row = cur.fetchone()
+    if row and float(row["dist_km"]) <= limit_km:
+        return {
+            "iata": row["iata"],
+            "name": row["name"],
+            "lat":  float(row["lat"]),
+            "lon":  float(row["lon"]),
+        }
+    return None
+
+
+def log_unknown_airport(cur, lat, lon, raw_label=None):
+    """Upsert an unresolved coordinate into unknown_airport_candidates.
+    Deduplicates by rounding to 2 decimal places (~1 km precision)."""
+    if lat is None or lon is None:
+        return
+    cur.execute("""
+        INSERT INTO unknown_airport_candidates (raw_label, normalized_label, lat, lon)
+        VALUES (%s, %s, %s, %s)
+        ON CONFLICT (round(lat::numeric, 2), round(lon::numeric, 2))
+        DO UPDATE SET
+            last_seen_at = NOW(),
+            seen_count   = unknown_airport_candidates.seen_count + 1,
+            raw_label    = EXCLUDED.raw_label
+    """, (
+        raw_label,
+        (raw_label or "").strip().upper(),
+        round(float(lat), 2),
+        round(float(lon), 2),
+    ))
+
+
+# =============================================================================
+# Flights table sync — keeps flights table live alongside events
+# =============================================================================
+
+def _airport_id(cur, iata):
+    if not iata or iata == "UNKNOWN":
+        return None
+    cur.execute("SELECT id FROM airports WHERE iata = %s LIMIT 1", (iata,))
+    row = cur.fetchone()
+    return row["id"] if row else None
+
+
+def sync_takeoff_to_flights(cur, aircraft_id, departure_time, origin_iata, source=None):
+    """Insert an in_flight row on TAKEOFF. No-op if row already exists."""
+    dep_id = _airport_id(cur, origin_iata)
+    cur.execute("""
+        INSERT INTO flights
+            (aircraft_id, departure_time, departure_label_raw, departure_airport_id,
+             status, tracking_mode, confidence_score, source, reason_code)
+        VALUES (%s, %s, %s, %s, 'in_flight', 'event_derived', 0.5, %s, 'takeoff_event')
+        ON CONFLICT (aircraft_id, departure_time) DO NOTHING
+    """, (aircraft_id, departure_time, origin_iata, dep_id, source))
+
+
+def sync_landing_to_flights(cur, aircraft_id, arrival_time, dest_iata, source=None):
+    """Update the latest in_flight row to landed on LANDING event."""
+    arr_id = _airport_id(cur, dest_iata)
+    cur.execute("""
+        UPDATE flights SET
+            arrival_time       = %s,
+            arrival_label_raw  = %s,
+            arrival_airport_id = %s,
+            status             = 'landed',
+            confidence_score   = CASE
+                WHEN departure_airport_id IS NOT NULL AND %s IS NOT NULL THEN 0.9
+                ELSE 0.7
+            END
+        WHERE id = (
+            SELECT id FROM flights
+            WHERE aircraft_id = %s
+              AND status = 'in_flight'
+              AND departure_time > %s - INTERVAL '16 hours'
+            ORDER BY departure_time DESC
+            LIMIT 1
+        )
+    """, (arrival_time, dest_iata, arr_id, arr_id, aircraft_id, arrival_time))
+
+
+# =============================================================================
+# Snapshot (live fleet state)
+# =============================================================================
 
 def get_snapshot(conn):
     with conn.cursor() as cur:
-
-        # All aircraft, with their latest position if available (LEFT JOIN)
         cur.execute("""
             SELECT DISTINCT ON (a.id)
                 a.id AS aircraft_id, p.ts, p.lat, p.lon,
                 p.altitude, p.velocity, p.heading,
                 COALESCE(p.on_ground, true) AS on_ground,
-                p.source, a.tail_number, a.icao24
+                p.source, a.tail_number, a.icao24,
+                apt.iata AS location,
+                apt.lat  AS airport_lat,
+                apt.lon  AS airport_lon
             FROM aircraft a
             LEFT JOIN positions p ON p.aircraft_id = a.id
+            LEFT JOIN LATERAL (
+                SELECT apt2.iata, apt2.lat, apt2.lon,
+                       (6371 * acos(LEAST(1.0,
+                           cos(radians(p.lat)) * cos(radians(apt2.lat))
+                           * cos(radians(apt2.lon) - radians(p.lon))
+                           + sin(radians(p.lat)) * sin(radians(apt2.lat))
+                       ))) AS dist_km
+                FROM airports apt2
+                WHERE p.lat IS NOT NULL AND p.lon IS NOT NULL
+                ORDER BY dist_km ASC
+                LIMIT 1
+            ) apt ON apt.dist_km <= CASE WHEN COALESCE(p.on_ground, true) THEN 150.0 ELSE 50.0 END
             ORDER BY a.id, p.ts DESC NULLS LAST
         """)
-        raw_positions = cur.fetchall()
-        latest_positions = []
-        for r in raw_positions:
-            on_ground = bool(r["on_ground"])
-            location = None
-            airport_lat = None
-            airport_lon = None
-            if r["lat"] is not None and r["lon"] is not None:
-                apt = (nearest_airport_on_ground(float(r["lat"]), float(r["lon"]))
-                       if on_ground
-                       else nearest_airport(float(r["lat"]), float(r["lon"]), radius_km=50))
-                if apt:
-                    location = apt["iata"]
-                    airport_lat = apt["lat"]
-                    airport_lon = apt["lon"]
-            latest_positions.append({
+        latest_positions = [
+            {
                 "tail_number": r["tail_number"],
-                "icao24": r["icao24"],
-                "ts": r["ts"].isoformat() if r["ts"] else None,
-                "lat": r["lat"],
-                "lon": r["lon"],
-                "altitude": r["altitude"],
-                "velocity": r["velocity"],
-                "heading": r["heading"],
-                "on_ground": on_ground,
-                "source": r["source"],
-                "location": location,
-                "airport_lat": airport_lat,
-                "airport_lon": airport_lon,
-            })
+                "icao24":      r["icao24"],
+                "ts":          r["ts"].isoformat() if r["ts"] else None,
+                "lat":         r["lat"],
+                "lon":         r["lon"],
+                "altitude":    r["altitude"],
+                "velocity":    r["velocity"],
+                "heading":     r["heading"],
+                "on_ground":   bool(r["on_ground"]),
+                "source":      r["source"],
+                "location":    r["location"],
+                "airport_lat": r["airport_lat"],
+                "airport_lon": r["airport_lon"],
+            }
+            for r in cur.fetchall()
+        ]
 
-        # KPIs + freshness in one round-trip
         cur.execute("""
             SELECT
                 (SELECT COUNT(DISTINCT aircraft_id)
@@ -62,17 +166,7 @@ def get_snapshot(conn):
         """)
         row = cur.fetchone()
         seen_last_15m = int(row["seen_last_15m"] or 0)
-        total_fleet = 6
 
-        fleet_kpis = {
-            "in_air": seen_last_15m,
-            "on_ground": total_fleet - seen_last_15m,
-            "seen_last_15m": seen_last_15m,
-            "events_last_hour": int(row["events_last_hour"] or 0),
-        }
-        freshness_seconds = int(row["freshness_seconds"] or 0)
-
-        # Last 50 events
         cur.execute("""
             SELECT e.ts, e.type, e.meta, a.tail_number, a.icao24
             FROM events e
@@ -82,20 +176,25 @@ def get_snapshot(conn):
         """)
         last_50_events = [
             {
-                "ts": r["ts"].isoformat(),
-                "type": r["type"],
+                "ts":          r["ts"].isoformat(),
+                "type":        r["type"],
                 "tail_number": r["tail_number"],
-                "icao24": r["icao24"],
-                "meta": r["meta"] if isinstance(r["meta"], dict) else json.loads(r["meta"] or "{}"),
+                "icao24":      r["icao24"],
+                "meta":        r["meta"] if isinstance(r["meta"], dict) else json.loads(r["meta"] or "{}"),
             }
             for r in cur.fetchall()
         ]
 
     return {
-        "fleet_kpis": fleet_kpis,
-        "latest_positions": latest_positions,
-        "last_50_events": last_50_events,
-        "data_freshness_seconds": freshness_seconds,
+        "fleet_kpis": {
+            "in_air":           seen_last_15m,
+            "on_ground":        6 - seen_last_15m,
+            "seen_last_15m":    seen_last_15m,
+            "events_last_hour": int(row["events_last_hour"] or 0),
+        },
+        "latest_positions":       latest_positions,
+        "last_50_events":         last_50_events,
+        "data_freshness_seconds": int(row["freshness_seconds"] or 0),
     }
 
 
@@ -118,40 +217,45 @@ def get_snapshot_at(conn, ts):
             SELECT DISTINCT ON (p.aircraft_id)
                 p.aircraft_id, p.ts, p.lat, p.lon,
                 p.altitude, p.velocity, p.heading, p.on_ground, p.source,
-                a.tail_number, a.icao24
+                a.tail_number, a.icao24,
+                apt.iata AS location,
+                apt.lat  AS airport_lat,
+                apt.lon  AS airport_lon
             FROM positions p
             JOIN aircraft a ON a.id = p.aircraft_id
+            LEFT JOIN LATERAL (
+                SELECT apt2.iata, apt2.lat, apt2.lon,
+                       (6371 * acos(LEAST(1.0,
+                           cos(radians(p.lat)) * cos(radians(apt2.lat))
+                           * cos(radians(apt2.lon) - radians(p.lon))
+                           + sin(radians(p.lat)) * sin(radians(apt2.lat))
+                       ))) AS dist_km
+                FROM airports apt2
+                WHERE p.lat IS NOT NULL AND p.lon IS NOT NULL
+                ORDER BY dist_km ASC
+                LIMIT 1
+            ) apt ON apt.dist_km <= CASE WHEN COALESCE(p.on_ground, false) THEN 150.0 ELSE 50.0 END
             WHERE p.ts <= %s
             ORDER BY p.aircraft_id, p.ts DESC
         """, (ts,))
-        raw = cur.fetchall()
-        latest_positions = []
-        for r in raw:
-            on_ground = bool(r["on_ground"])
-            location = airport_lat = airport_lon = None
-            if r["lat"] is not None and r["lon"] is not None:
-                apt = (nearest_airport_on_ground(float(r["lat"]), float(r["lon"]))
-                       if on_ground
-                       else nearest_airport(float(r["lat"]), float(r["lon"]), radius_km=50))
-                if apt:
-                    location = apt["iata"]
-                    airport_lat = apt["lat"]
-                    airport_lon = apt["lon"]
-            latest_positions.append({
+        latest_positions = [
+            {
                 "tail_number": r["tail_number"],
-                "icao24": r["icao24"],
-                "ts": r["ts"].isoformat(),
-                "lat": r["lat"],
-                "lon": r["lon"],
-                "altitude": r["altitude"],
-                "velocity": r["velocity"],
-                "heading": r["heading"],
-                "on_ground": on_ground,
-                "source": r["source"],
-                "location": location,
-                "airport_lat": airport_lat,
-                "airport_lon": airport_lon,
-            })
+                "icao24":      r["icao24"],
+                "ts":          r["ts"].isoformat(),
+                "lat":         r["lat"],
+                "lon":         r["lon"],
+                "altitude":    r["altitude"],
+                "velocity":    r["velocity"],
+                "heading":     r["heading"],
+                "on_ground":   bool(r["on_ground"]),
+                "source":      r["source"],
+                "location":    r["location"],
+                "airport_lat": r["airport_lat"],
+                "airport_lon": r["airport_lon"],
+            }
+            for r in cur.fetchall()
+        ]
         cur.execute("""
             SELECT
                 (SELECT COUNT(DISTINCT aircraft_id) FROM positions
@@ -171,23 +275,23 @@ def get_snapshot_at(conn, ts):
         """, (ts,))
         last_events = [
             {
-                "ts": r["ts"].isoformat(),
-                "type": r["type"],
+                "ts":          r["ts"].isoformat(),
+                "type":        r["type"],
                 "tail_number": r["tail_number"],
-                "icao24": r["icao24"],
-                "meta": r["meta"] if isinstance(r["meta"], dict) else json.loads(r["meta"] or "{}"),
+                "icao24":      r["icao24"],
+                "meta":        r["meta"] if isinstance(r["meta"], dict) else json.loads(r["meta"] or "{}"),
             }
             for r in cur.fetchall()
         ]
     return {
         "fleet_kpis": {
-            "in_air": seen_last_15m,
-            "on_ground": 6 - seen_last_15m,
-            "seen_last_15m": seen_last_15m,
+            "in_air":           seen_last_15m,
+            "on_ground":        6 - seen_last_15m,
+            "seen_last_15m":    seen_last_15m,
             "events_last_hour": int(row["events_last_hour"] or 0),
         },
-        "latest_positions": latest_positions,
-        "last_50_events": last_events,
+        "latest_positions":       latest_positions,
+        "last_50_events":         last_events,
         "data_freshness_seconds": 0,
     }
 
@@ -233,11 +337,11 @@ def get_replay_range(conn, start_dt, end_dt, step_seconds, aircraft_icao24=None)
 
         events_at = [
             {
-                "ts": e["ts"].isoformat(),
-                "type": e["type"],
+                "ts":          e["ts"].isoformat(),
+                "type":        e["type"],
                 "tail_number": e["tail_number"],
-                "icao24": e["icao24"],
-                "meta": e["meta"] if isinstance(e["meta"], dict) else json.loads(e["meta"] or "{}"),
+                "icao24":      e["icao24"],
+                "meta":        e["meta"] if isinstance(e["meta"], dict) else json.loads(e["meta"] or "{}"),
             }
             for e in all_events if e["ts"] <= current
         ][-20:]
@@ -245,23 +349,23 @@ def get_replay_range(conn, start_dt, end_dt, step_seconds, aircraft_icao24=None)
         steps.append({
             "ts": current.isoformat(),
             "fleet_kpis": {
-                "in_air": seen_15m,
-                "on_ground": 6 - seen_15m,
-                "seen_last_15m": seen_15m,
+                "in_air":           seen_15m,
+                "on_ground":        6 - seen_15m,
+                "seen_last_15m":    seen_15m,
                 "events_last_hour": events_1h,
             },
             "latest_positions": [
                 {
                     "tail_number": r["tail_number"],
-                    "icao24": r["icao24"],
-                    "ts": r["ts"].isoformat(),
-                    "lat": r["lat"],
-                    "lon": r["lon"],
-                    "altitude": r["altitude"],
-                    "velocity": r["velocity"],
-                    "heading": r["heading"],
-                    "on_ground": r["on_ground"],
-                    "source": r["source"],
+                    "icao24":      r["icao24"],
+                    "ts":          r["ts"].isoformat(),
+                    "lat":         r["lat"],
+                    "lon":         r["lon"],
+                    "altitude":    r["altitude"],
+                    "velocity":    r["velocity"],
+                    "heading":     r["heading"],
+                    "on_ground":   r["on_ground"],
+                    "source":      r["source"],
                 }
                 for r in seen.values()
             ],
@@ -271,43 +375,48 @@ def get_replay_range(conn, start_dt, end_dt, step_seconds, aircraft_icao24=None)
     return steps
 
 
+# =============================================================================
+# Flight board — queries flights table (pre-materialised from events)
+# =============================================================================
+
 def get_flight_board(conn, limit=40, icao24=None):
-    """Return last N flights (TAKEOFF + matching LANDING) with origin/destination airports."""
     icao_filter = " AND a.icao24 = %s" if icao24 else ""
     params = ([icao24] if icao24 else []) + [limit]
 
     with conn.cursor() as cur:
         cur.execute(f"""
             SELECT
-                t.ts                                       AS takeoff_ts,
-                t.aircraft_id,
-                l.ts                                       AS landing_ts,
+                f.departure_time                                     AS takeoff_ts,
+                f.aircraft_id,
+                f.arrival_time                                       AS landing_ts,
                 a.tail_number,
                 a.icao24,
-                COALESCE(t.meta->>'origin_airport', '—')  AS origin,
-                COALESCE(t.meta->>'origin_name',    '—')  AS origin_name,
-                COALESCE(l.meta->>'destination_airport','—') AS destination,
-                COALESCE(l.meta->>'destination_name',    '—') AS destination_name,
-                CASE WHEN t.meta->>'velocity' ~ '^[0-9]+(\.[0-9]+)?$'
-                     THEN (t.meta->>'velocity')::float END AS velocity_kmh,
-                CASE WHEN t.meta->>'altitude' ~ '^[0-9]+(\.[0-9]+)?$'
-                     THEN (t.meta->>'altitude')::float END AS cruise_alt,
-                t.meta->>'source'                          AS source
-            FROM events t
-            JOIN aircraft a ON a.id = t.aircraft_id
+                COALESCE(dep.iata, f.departure_label_raw, '—')      AS origin,
+                COALESCE(dep.name, f.departure_label_raw, '—')      AS origin_name,
+                COALESCE(arr.iata, f.arrival_label_raw,  '—')       AS destination,
+                COALESCE(arr.name, f.arrival_label_raw,  '—')       AS destination_name,
+                evt.velocity_kmh,
+                evt.cruise_alt,
+                f.source
+            FROM flights f
+            JOIN aircraft a ON a.id = f.aircraft_id
+            LEFT JOIN airports dep ON dep.id = f.departure_airport_id
+            LEFT JOIN airports arr ON arr.id = f.arrival_airport_id
             LEFT JOIN LATERAL (
-                SELECT l2.ts, l2.meta FROM events l2
-                WHERE l2.aircraft_id = t.aircraft_id
-                  AND l2.type = 'LANDING'
-                  AND l2.ts > t.ts
-                  AND l2.ts < t.ts + INTERVAL '16 hours'
-                ORDER BY l2.ts ASC LIMIT 1
-            ) l ON true
-            WHERE t.type = 'TAKEOFF'
-              AND (t.meta->>'velocity' ~ '^[0-9]+(\.[0-9]+)?$'
-                   AND (t.meta->>'velocity')::float > 80)
-              {icao_filter}
-            ORDER BY t.ts DESC
+                SELECT
+                    CASE WHEN e.meta->>'velocity' ~ '^[0-9]+([.][0-9]+)?$'
+                         THEN (e.meta->>'velocity')::float END AS velocity_kmh,
+                    CASE WHEN e.meta->>'altitude' ~ '^[0-9]+([.][0-9]+)?$'
+                         THEN (e.meta->>'altitude')::float END AS cruise_alt
+                FROM events e
+                WHERE e.aircraft_id = f.aircraft_id
+                  AND e.type = 'TAKEOFF'
+                  AND e.ts = f.departure_time
+                LIMIT 1
+            ) evt ON true
+            WHERE f.confidence_score > 0.3
+            {icao_filter}
+            ORDER BY f.departure_time DESC
             LIMIT %s
         """, params)
         rows = cur.fetchall()
@@ -315,10 +424,6 @@ def get_flight_board(conn, limit=40, icao24=None):
     if not rows:
         return {"flights": []}
 
-    from datetime import timedelta
-    from collections import defaultdict
-
-    # Try to bulk-fetch track point counts; if anything fails just use 0
     pos_by_aircraft: dict = defaultdict(list)
     try:
         aircraft_ids = list({r["aircraft_id"] for r in rows})
@@ -334,7 +439,7 @@ def get_flight_board(conn, limit=40, icao24=None):
     except Exception as e:
         print(f"[flight_board] track count fetch failed (non-fatal): {e}")
 
-    flights = []
+    flights_out = []
     for r in rows:
         dur_s = None
         if r["landing_ts"] and r["takeoff_ts"]:
@@ -344,7 +449,7 @@ def get_flight_board(conn, limit=40, icao24=None):
             1 for ts in pos_by_aircraft[r["aircraft_id"]]
             if r["takeoff_ts"] <= ts <= end_ts
         )
-        flights.append({
+        flights_out.append({
             "tail_number":      r["tail_number"],
             "icao24":           r["icao24"],
             "takeoff_ts":       r["takeoff_ts"].isoformat(),
@@ -358,7 +463,7 @@ def get_flight_board(conn, limit=40, icao24=None):
             "cruise_alt":       float(r["cruise_alt"])   if r["cruise_alt"]   else None,
             "track_points":     track_pts,
         })
-    return {"flights": flights}
+    return {"flights": flights_out}
 
 
 def get_flight_track(conn, icao24, takeoff_ts, landing_ts=None):
@@ -398,3 +503,64 @@ def get_last_seen_from_db(conn):
             ORDER BY p.aircraft_id, p.ts DESC
         """)
         return {r["tail_number"]: r["ts"].timestamp() for r in cur.fetchall()}
+
+
+# =============================================================================
+# Maintenance jobs
+# =============================================================================
+
+def cleanup_stale_flights(conn):
+    """Mark in_flight rows older than 24 h as incomplete (missed landing detection).
+    Returns count of rows updated."""
+    with conn.cursor() as cur:
+        cur.execute("""
+            UPDATE flights
+            SET status = 'incomplete'
+            WHERE status = 'in_flight'
+              AND departure_time < NOW() - INTERVAL '24 hours'
+        """)
+        return cur.rowcount
+
+
+def promote_unknown_airports(conn, min_seen=3):
+    """Flag candidates seen >= min_seen times as ready for human review.
+    Returns count of rows promoted."""
+    with conn.cursor() as cur:
+        cur.execute("""
+            UPDATE unknown_airport_candidates
+            SET status = 'review'
+            WHERE status = 'pending'
+              AND seen_count >= %s
+        """, (min_seen,))
+        return cur.rowcount
+
+
+def get_unknown_airport_candidates(conn, status='pending', limit=50):
+    """Return unknown airport candidates ordered by frequency."""
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT id, raw_label, normalized_label, lat, lon,
+                   first_seen_at, last_seen_at, seen_count, status,
+                   confidence_score, notes
+            FROM unknown_airport_candidates
+            WHERE status = %s
+            ORDER BY seen_count DESC, last_seen_at DESC
+            LIMIT %s
+        """, (status, limit))
+        rows = cur.fetchall()
+    return [
+        {
+            "id":               r["id"],
+            "raw_label":        r["raw_label"],
+            "normalized_label": r["normalized_label"],
+            "lat":              r["lat"],
+            "lon":              r["lon"],
+            "first_seen_at":    r["first_seen_at"].isoformat(),
+            "last_seen_at":     r["last_seen_at"].isoformat(),
+            "seen_count":       r["seen_count"],
+            "status":           r["status"],
+            "confidence_score": r["confidence_score"],
+            "notes":            r["notes"],
+        }
+        for r in rows
+    ]

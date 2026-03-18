@@ -11,12 +11,12 @@ def get_forecast(conn):
         # DOW: Sun=0, Mon=1..Sat=6 — matches Python isoweekday() % 7.
         cur.execute("""
             SELECT
-                EXTRACT(DOW FROM ts AT TIME ZONE 'America/Argentina/Buenos_Aires')::int * 24
-                + EXTRACT(HOUR FROM ts AT TIME ZONE 'America/Argentina/Buenos_Aires')::int AS how,
+                EXTRACT(DOW FROM departure_time AT TIME ZONE 'America/Argentina/Buenos_Aires')::int * 24
+                + EXTRACT(HOUR FROM departure_time AT TIME ZONE 'America/Argentina/Buenos_Aires')::int AS how,
                 COUNT(*) AS cnt
-            FROM events
-            WHERE type = 'TAKEOFF'
-              AND ts > NOW() - INTERVAL '30 days'
+            FROM flights
+            WHERE confidence_score > 0.3
+              AND departure_time > NOW() - INTERVAL '30 days'
             GROUP BY how
         """)
         raw_counts = {int(r["how"]): int(r["cnt"]) for r in cur.fetchall()}
@@ -24,10 +24,10 @@ def get_forecast(conn):
         # Recency factor — single query, two filtered aggregates.
         cur.execute("""
             SELECT
-                COUNT(*) FILTER (WHERE ts > NOW() - INTERVAL '7 days')  AS last_7,
-                COUNT(*) FILTER (WHERE ts > NOW() - INTERVAL '30 days') AS last_30
-            FROM events
-            WHERE type = 'TAKEOFF'
+                COUNT(*) FILTER (WHERE departure_time > NOW() - INTERVAL '7 days')  AS last_7,
+                COUNT(*) FILTER (WHERE departure_time > NOW() - INTERVAL '30 days') AS last_30
+            FROM flights
+            WHERE confidence_score > 0.3
         """)
         row = cur.fetchone()
         last_7  = int(row["last_7"]  or 0)
@@ -37,12 +37,9 @@ def get_forecast(conn):
         max(0.5, min(1.5, last_7 / last_30)) if last_30 > 0 else 1.0
     )
 
-    # Normalize raw counts to per-occurrence rate.
-    # Each hour-of-week slot appears ~30/7 times in a 30-day window.
     weeks_in_window = 30.0 / 7.0
     hourly_rates = {how: cnt / weeks_in_window for how, cnt in raw_counts.items()}
 
-    # Build next 24h series starting from current hour (Argentina time).
     now = datetime.now(ARGENTINA_TZ)
     current_hour = now.replace(minute=0, second=0, microsecond=0)
 
