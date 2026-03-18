@@ -17,10 +17,10 @@
   overflow: hidden;
 }
 
-/* Airborne pulse ring animation */
+/* Airborne pulse ring animation — opacity only, no transform to avoid anchor drift */
 @keyframes fleet-pulse {
-  0%, 100% { opacity: 0.7; transform: scale(1); }
-  50%       { opacity: 0.15; transform: scale(1.4); }
+  0%, 100% { opacity: 0.75; }
+  50%       { opacity: 0.05; }
 }
 
 /* iOS safe area inset for bottom nav */

@@ -18,6 +18,7 @@ interface Position {
   location?: string | null;
   airport_lat?: number | null;
   airport_lon?: number | null;
+  stale_hours?: number | null;
 }
 
 const TAIL_COLORS: Record<string, string> = {
@@ -34,14 +35,17 @@ function getColor(tail: string) {
 }
 
 function createMarkerEl(pos: Position, color: string): HTMLElement {
+  // Wrapper is exactly 36×36 — MapLibre anchor:'center' will be pixel-perfect.
+  // The pulse ring lives INSIDE the same box (inset:0) so it never expands
+  // the element's bounding box and cannot skew the geographic anchor.
   const wrap = document.createElement('div');
-  wrap.style.cssText = 'position:relative;width:36px;height:36px;cursor:pointer';
+  wrap.style.cssText = 'position:relative;width:36px;height:36px;cursor:pointer;overflow:visible';
 
   if (!pos.on_ground) {
     const ring = document.createElement('div');
     ring.style.cssText = `
-      position:absolute;inset:-8px;border-radius:50%;
-      border:1.5px solid ${color};opacity:0.7;
+      position:absolute;inset:0;border-radius:50%;
+      border:1.5px solid ${color};
       animation:fleet-pulse 2.2s ease-in-out infinite;
       pointer-events:none;
     `;
@@ -49,23 +53,31 @@ function createMarkerEl(pos: Position, color: string): HTMLElement {
   }
 
   const deg = pos.heading ?? 0;
-  const iconColor = pos.on_ground ? '#475569' : color;
-  const glowAlpha = pos.on_ground ? '60' : 'bb';
+  const stale = (pos.stale_hours ?? 0) >= 2;
+  const iconColor = pos.on_ground ? (stale ? '#78716c' : '#475569') : color;
+  const glowAlpha = pos.on_ground ? '50' : 'bb';
 
   const plane = document.createElement('div');
   plane.className = 'fleet-plane';
   plane.style.cssText = `
-    width:36px;height:36px;display:flex;align-items:center;justify-content:center;
+    position:absolute;inset:0;
+    display:flex;align-items:center;justify-content:center;
     transform:rotate(${deg}deg);transition:transform 0.9s ease;
-    filter:drop-shadow(0 0 7px ${iconColor}${glowAlpha});
-    opacity:${pos.on_ground ? 0.5 : 1};
+    filter:drop-shadow(0 0 6px ${iconColor}${glowAlpha});
+    opacity:${pos.on_ground ? (stale ? 0.4 : 0.55) : 1};
   `;
-  plane.innerHTML = `<svg viewBox="0 0 24 24" width="26" height="26" fill="${iconColor}">
+  plane.innerHTML = `<svg viewBox="0 0 24 24" width="24" height="24" fill="${iconColor}">
     <path d="M21 16v-2l-8-5V3.5C13 2.67 12.33 2 11.5 2S10 2.67 10 3.5V9l-8 5v2l8-2.5V19l-2 1.5V22l3.5-1 3.5 1v-1.5L13 19v-5.5l8 2.5z"/>
   </svg>`;
 
   wrap.appendChild(plane);
   return wrap;
+}
+
+function fmtStale(h: number): string {
+  if (h >= 48) return `${Math.round(h / 24)}d`;
+  if (h >= 1)  return `${Math.round(h)}h`;
+  return `${Math.round(h * 60)}min`;
 }
 
 function buildPopupHTML(pos: Position, color: string): string {
@@ -74,6 +86,11 @@ function buildPopupHTML(pos: Position, color: string): string {
   const vel = pos.velocity  != null ? `${Math.round(pos.velocity)} km/h` : '—';
   const hdg = pos.heading   != null ? `${Math.round(pos.heading)}°` : '—';
   const loc = pos.location ?? '';
+  const staleH = pos.stale_hours ?? 0;
+
+  const staleBadge = staleH >= 2
+    ? `<div style="color:#f59e0b;font-size:10px;margin-bottom:5px;opacity:0.85">⚠ Sin señal hace ${fmtStale(staleH)}</div>`
+    : '';
 
   const rows = pos.on_ground
     ? `<div><span class="fp-lbl">STATUS</span> <span class="fp-val">En tierra</span></div>
@@ -92,7 +109,8 @@ function buildPopupHTML(pos: Position, color: string): string {
       font-family:ui-monospace,monospace;
       box-shadow:0 8px 32px #00000099,0 0 0 1px ${color}18;
     ">
-      <div style="font-size:14px;font-weight:700;color:${color};margin-bottom:7px;letter-spacing:.06em">${pos.tail_number}</div>
+      <div style="font-size:14px;font-weight:700;color:${color};margin-bottom:5px;letter-spacing:.06em">${pos.tail_number}</div>
+      ${staleBadge}
       <div style="font-size:11px;line-height:1.9;color:#94a3b8">
         ${rows}
       </div>

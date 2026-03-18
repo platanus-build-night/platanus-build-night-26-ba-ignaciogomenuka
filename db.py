@@ -108,6 +108,9 @@ def sync_landing_to_flights(cur, aircraft_id, arrival_time, dest_iata, source=No
 # =============================================================================
 
 def get_snapshot(conn):
+    from datetime import datetime, timezone as tz
+    STALE_HOURS = 2.0   # no signal for 2 h → assume landed
+
     with conn.cursor() as cur:
         cur.execute("""
             SELECT DISTINCT ON (a.id)
@@ -134,24 +137,7 @@ def get_snapshot(conn):
             ) apt ON apt.dist_km <= CASE WHEN COALESCE(p.on_ground, true) THEN 150.0 ELSE 50.0 END
             ORDER BY a.id, p.ts DESC NULLS LAST
         """)
-        latest_positions = [
-            {
-                "tail_number": r["tail_number"],
-                "icao24":      r["icao24"],
-                "ts":          r["ts"].isoformat() if r["ts"] else None,
-                "lat":         r["lat"],
-                "lon":         r["lon"],
-                "altitude":    r["altitude"],
-                "velocity":    r["velocity"],
-                "heading":     r["heading"],
-                "on_ground":   bool(r["on_ground"]),
-                "source":      r["source"],
-                "location":    r["location"],
-                "airport_lat": r["airport_lat"],
-                "airport_lon": r["airport_lon"],
-            }
-            for r in cur.fetchall()
-        ]
+        raw_pos_rows = cur.fetchall()
 
         cur.execute("""
             SELECT
@@ -164,8 +150,8 @@ def get_snapshot(conn):
                 (SELECT EXTRACT(EPOCH FROM (NOW() - MAX(ts)))::int
                  FROM positions) AS freshness_seconds
         """)
-        row = cur.fetchone()
-        seen_last_15m = int(row["seen_last_15m"] or 0)
+        kpi_row = cur.fetchone()
+        seen_last_15m = int(kpi_row["seen_last_15m"] or 0)
 
         cur.execute("""
             SELECT e.ts, e.type, e.meta, a.tail_number, a.icao24
@@ -185,16 +171,79 @@ def get_snapshot(conn):
             for r in cur.fetchall()
         ]
 
+    # --- Stale-state correction -------------------------------------------
+    now_utc = datetime.now(tz.utc)
+    latest_positions = []
+    stale_map = {}  # aircraft_id → pos_dict (was airborne, now assumed landed)
+
+    for r in raw_pos_rows:
+        ts_dt    = r["ts"]
+        on_ground = bool(r["on_ground"])
+        stale_h   = None
+
+        if ts_dt is not None:
+            if ts_dt.tzinfo is None:
+                ts_dt = ts_dt.replace(tzinfo=tz.utc)
+            age_h = (now_utc - ts_dt).total_seconds() / 3600.0
+            if age_h >= STALE_HOURS:
+                stale_h = round(age_h, 1)
+                if not on_ground:
+                    on_ground = True  # signal lost → assume landed
+
+        pos = {
+            "tail_number": r["tail_number"],
+            "icao24":      r["icao24"],
+            "ts":          r["ts"].isoformat() if r["ts"] else None,
+            "lat":         r["lat"],
+            "lon":         r["lon"],
+            "altitude":    r["altitude"],
+            "velocity":    r["velocity"],
+            "heading":     r["heading"],
+            "on_ground":   on_ground,
+            "source":      r["source"],
+            "location":    r["location"],
+            "airport_lat": r["airport_lat"],
+            "airport_lon": r["airport_lon"],
+            "stale_hours": stale_h,
+        }
+
+        # Was airborne in DB but now forced on_ground → try to find last landing
+        if stale_h is not None and not bool(r["on_ground"]) and r["aircraft_id"] is not None:
+            stale_map[r["aircraft_id"]] = pos
+
+        latest_positions.append(pos)
+
+    # Resolve last-known landing airport for stale airborne aircraft
+    if stale_map:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT DISTINCT ON (f.aircraft_id)
+                    f.aircraft_id,
+                    arr.iata AS location,
+                    arr.lat  AS airport_lat,
+                    arr.lon  AS airport_lon
+                FROM flights f
+                JOIN airports arr ON arr.id = f.arrival_airport_id
+                WHERE f.aircraft_id = ANY(%s) AND f.status = 'landed'
+                ORDER BY f.aircraft_id, f.arrival_time DESC
+            """, (list(stale_map.keys()),))
+            for row in cur.fetchall():
+                pos = stale_map.get(row["aircraft_id"])
+                if pos:
+                    pos["location"]    = row["location"]
+                    pos["airport_lat"] = row["airport_lat"]
+                    pos["airport_lon"] = row["airport_lon"]
+
     return {
         "fleet_kpis": {
             "in_air":           seen_last_15m,
             "on_ground":        6 - seen_last_15m,
             "seen_last_15m":    seen_last_15m,
-            "events_last_hour": int(row["events_last_hour"] or 0),
+            "events_last_hour": int(kpi_row["events_last_hour"] or 0),
         },
         "latest_positions":       latest_positions,
         "last_50_events":         last_50_events,
-        "data_freshness_seconds": int(row["freshness_seconds"] or 0),
+        "data_freshness_seconds": int(kpi_row["freshness_seconds"] or 0),
     }
 
 
