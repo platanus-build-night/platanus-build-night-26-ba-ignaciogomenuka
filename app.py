@@ -29,7 +29,7 @@ PLANES = {
     "e06546": "LV-FUF",
     "e0b341": "LV-KMA",
     "e0b058": "LV-KAX",
-    "e07851": "LV-CPL",
+    "e0340c": "LV-CPL",
 }
 
 active_planes = set()

@@ -148,7 +148,7 @@ const PLANES = [
   { icao24: 'e06546', tail: 'LV-FUF' },
   { icao24: 'e0b341', tail: 'LV-KMA' },
   { icao24: 'e0b058', tail: 'LV-KAX' },
-  { icao24: 'e07851', tail: 'LV-CPL' },
+  { icao24: 'e0340c', tail: 'LV-CPL' },
 ];
 
 // ─── Mobile nav icons (inline SVG) ────────────────────────────────────────────
