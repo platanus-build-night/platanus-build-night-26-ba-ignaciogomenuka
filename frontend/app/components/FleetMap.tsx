@@ -66,8 +66,10 @@ function createMarkerEl(pos: Position, color: string): HTMLElement {
     filter:drop-shadow(0 0 6px ${iconColor}${glowAlpha});
     opacity:${pos.on_ground ? (stale ? 0.4 : 0.55) : 1};
   `;
-  plane.innerHTML = `<svg viewBox="0 0 24 24" width="24" height="24" fill="${iconColor}">
-    <path d="M21 16v-2l-8-5V3.5C13 2.67 12.33 2 11.5 2S10 2.67 10 3.5V9l-8 5v2l8-2.5V19l-2 1.5V22l3.5-1 3.5 1v-1.5L13 19v-5.5l8 2.5z"/>
+  // viewBox centered at (0,0) so the geographic pin sits exactly at the visual
+  // center of the icon regardless of heading rotation or zoom level.
+  plane.innerHTML = `<svg viewBox="-12 -12 24 24" width="28" height="28" fill="${iconColor}">
+    <path d="M0,-7 L1.5,-2 L10,-1 L10,1 L1.5,2 L2.5,7 L2.5,8 L0,7 L-2.5,8 L-2.5,7 L-1.5,2 L-10,1 L-10,-1 L-1.5,-2 Z"/>
   </svg>`;
 
   wrap.appendChild(plane);
