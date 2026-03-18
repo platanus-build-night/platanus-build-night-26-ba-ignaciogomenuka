@@ -34,97 +34,6 @@ function getColor(tail: string) {
   return TAIL_COLORS[tail] ?? '#94a3b8';
 }
 
-function createMarkerEl(pos: Position, color: string): HTMLElement {
-  // Wrapper is exactly 36×36 — MapLibre anchor:'center' will be pixel-perfect.
-  // The pulse ring lives INSIDE the same box (inset:0) so it never expands
-  // the element's bounding box and cannot skew the geographic anchor.
-  const wrap = document.createElement('div');
-  wrap.style.cssText = 'position:relative;width:36px;height:36px;cursor:pointer;overflow:visible';
-
-  if (!pos.on_ground) {
-    const ring = document.createElement('div');
-    ring.style.cssText = `
-      position:absolute;inset:0;border-radius:50%;
-      border:1.5px solid ${color};
-      animation:fleet-pulse 2.2s ease-in-out infinite;
-      pointer-events:none;
-    `;
-    wrap.appendChild(ring);
-  }
-
-  const deg = pos.heading ?? 0;
-  const stale = (pos.stale_hours ?? 0) >= 2;
-  const iconColor = pos.on_ground ? (stale ? '#78716c' : '#475569') : color;
-  const glowAlpha = pos.on_ground ? '50' : 'bb';
-
-  const plane = document.createElement('div');
-  plane.className = 'fleet-plane';
-  plane.style.cssText = `
-    position:absolute;inset:0;
-    display:flex;align-items:center;justify-content:center;
-    transform:rotate(${deg}deg);transition:transform 0.9s ease;
-    filter:drop-shadow(0 0 6px ${iconColor}${glowAlpha});
-    opacity:${pos.on_ground ? (stale ? 0.4 : 0.55) : 1};
-  `;
-  // viewBox centered at (0,0) so the geographic pin sits exactly at the visual
-  // center of the icon regardless of heading rotation or zoom level.
-  plane.innerHTML = `<svg viewBox="-12 -12 24 24" width="28" height="28" fill="${iconColor}">
-    <path d="M0,-7 L1.5,-2 L10,-1 L10,1 L1.5,2 L2.5,7 L2.5,8 L0,7 L-2.5,8 L-2.5,7 L-1.5,2 L-10,1 L-10,-1 L-1.5,-2 Z"/>
-  </svg>`;
-
-  wrap.appendChild(plane);
-  return wrap;
-}
-
-function fmtStale(h: number): string {
-  if (h >= 48) return `${Math.round(h / 24)}d`;
-  if (h >= 1)  return `${Math.round(h)}h`;
-  return `${Math.round(h * 60)}min`;
-}
-
-function buildPopupHTML(pos: Position, color: string): string {
-  const alt = pos.altitude != null ? `${Math.round(pos.altitude).toLocaleString()} ft` : '—';
-  const fl  = pos.altitude != null ? `FL${Math.round(pos.altitude / 100).toString().padStart(3, '0')}` : '';
-  const vel = pos.velocity  != null ? `${Math.round(pos.velocity)} km/h` : '—';
-  const hdg = pos.heading   != null ? `${Math.round(pos.heading)}°` : '—';
-  const loc = pos.location ?? '';
-  const staleH = pos.stale_hours ?? 0;
-
-  const staleBadge = staleH >= 2
-    ? `<div style="color:#f59e0b;font-size:10px;margin-bottom:5px;opacity:0.85">⚠ Sin señal hace ${fmtStale(staleH)}</div>`
-    : '';
-
-  const rows = pos.on_ground
-    ? `<div><span class="fp-lbl">STATUS</span> <span class="fp-val">En tierra</span></div>
-       ${loc ? `<div style="color:${color};margin-top:2px;font-size:12px">${loc}</div>` : ''}`
-    : `<div><span class="fp-lbl">ALT</span> <span class="fp-val">${alt}</span> <span style="color:#fbbf2477;font-size:10px">${fl}</span></div>
-       <div><span class="fp-lbl">SPD</span> <span class="fp-val">${vel}</span></div>
-       <div><span class="fp-lbl">HDG</span> <span class="fp-val">${hdg}</span></div>`;
-
-  return `
-    <div style="
-      background:#0a1120;
-      border:1px solid ${color}44;
-      border-radius:8px;
-      padding:10px 14px;
-      min-width:165px;
-      font-family:ui-monospace,monospace;
-      box-shadow:0 8px 32px #00000099,0 0 0 1px ${color}18;
-    ">
-      <div style="font-size:14px;font-weight:700;color:${color};margin-bottom:5px;letter-spacing:.06em">${pos.tail_number}</div>
-      ${staleBadge}
-      <div style="font-size:11px;line-height:1.9;color:#94a3b8">
-        ${rows}
-      </div>
-      <div style="color:#334155;font-size:10px;margin-top:6px;border-top:1px solid #1e293b;padding-top:5px">${pos.source}</div>
-    </div>
-    <style>
-      .fp-lbl{color:#475569}
-      .fp-val{color:#e2e8f0}
-    </style>
-  `;
-}
-
 const DARK_STYLE: maplibregl.StyleSpecification = {
   version: 8,
   sources: {
@@ -144,15 +53,146 @@ const DARK_STYLE: maplibregl.StyleSpecification = {
   layers: [{ id: 'carto-dark', type: 'raster', source: 'carto' }],
 };
 
-type MarkerEntry = { marker: maplibregl.Marker; onGround: boolean };
+// ---------------------------------------------------------------------------
+// SDF plane icon — drawn on a canvas, registered once with the map.
+// White fill on transparent background; MapLibre recolors via icon-color.
+// Centered at canvas midpoint so icon-rotate pivots on the geographic pin.
+// ---------------------------------------------------------------------------
+function makePlaneIconData(size: number): ImageData {
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext('2d')!;
+  ctx.clearRect(0, 0, size, size);
+  ctx.fillStyle = 'white';
 
-export default function FleetMap({ positions, trail }: { positions: Position[]; trail?: [number, number][] }) {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const mapRef       = useRef<maplibregl.Map | null>(null);
-  const markersRef   = useRef<Map<string, MarkerEntry>>(new Map());
-  const trailReady   = useRef(false);
+  // Plane path in [-12, 12] user space, pointing north (up).
+  // Visual center is at (0,0) which maps to canvas center (size/2, size/2).
+  const s = size / 24;
+  ctx.save();
+  ctx.translate(size / 2, size / 2);
+  ctx.scale(s, s);
+  ctx.beginPath();
+  ctx.moveTo(0, -7);
+  ctx.lineTo(1.5, -2);
+  ctx.lineTo(10, -1);
+  ctx.lineTo(10, 1);
+  ctx.lineTo(1.5, 2);
+  ctx.lineTo(2.5, 7);
+  ctx.lineTo(2.5, 8);
+  ctx.lineTo(0, 7);
+  ctx.lineTo(-2.5, 8);
+  ctx.lineTo(-2.5, 7);
+  ctx.lineTo(-1.5, 2);
+  ctx.lineTo(-10, 1);
+  ctx.lineTo(-10, -1);
+  ctx.lineTo(-1.5, -2);
+  ctx.closePath();
+  ctx.fill();
+  ctx.restore();
 
-  // Init map once
+  return ctx.getImageData(0, 0, size, size);
+}
+
+// ---------------------------------------------------------------------------
+// GeoJSON builder — positions → FeatureCollection consumed by the symbol layer
+// ---------------------------------------------------------------------------
+function buildGeoJSON(positions: Position[]) {
+  return {
+    type: 'FeatureCollection' as const,
+    features: positions
+      .filter(p => p.lat != null && p.lon != null)
+      .map(pos => {
+        // On-ground aircraft snap to the airport reference point when known.
+        const lng = (pos.on_ground && pos.airport_lon != null
+          ? pos.airport_lon : pos.lon) as number;
+        const lat = (pos.on_ground && pos.airport_lat != null
+          ? pos.airport_lat : pos.lat) as number;
+
+        const staleH = pos.stale_hours ?? 0;
+        return {
+          type: 'Feature' as const,
+          geometry: { type: 'Point' as const, coordinates: [lng, lat] },
+          properties: {
+            icao24:      pos.icao24,
+            tail_number: pos.tail_number,
+            color:       getColor(pos.tail_number),
+            heading:     pos.heading ?? 0,
+            on_ground:   pos.on_ground,
+            stale:       staleH >= 2,
+            stale_hours: staleH,
+            altitude:    pos.altitude,
+            velocity:    pos.velocity,
+            location:    pos.location ?? '',
+            source:      pos.source,
+          },
+        };
+      }),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Popup HTML — accepts flattened properties from a GeoJSON feature
+// ---------------------------------------------------------------------------
+function fmtStale(h: number): string {
+  if (h >= 48) return `${Math.round(h / 24)}d`;
+  if (h >= 1)  return `${Math.round(h)}h`;
+  return `${Math.round(h * 60)}min`;
+}
+
+function buildPopupHTML(p: Record<string, unknown>): string {
+  const color  = p.color as string;
+  const alt    = p.altitude != null ? `${Math.round(p.altitude as number).toLocaleString()} ft` : '—';
+  const fl     = p.altitude != null ? `FL${Math.round((p.altitude as number) / 100).toString().padStart(3, '0')}` : '';
+  const vel    = p.velocity  != null ? `${Math.round(p.velocity  as number)} km/h` : '—';
+  const hdg    = p.heading   != null ? `${Math.round(p.heading   as number)}°` : '—';
+  const loc    = (p.location as string) || '';
+  const staleH = (p.stale_hours as number) ?? 0;
+
+  const staleBadge = staleH >= 2
+    ? `<div style="color:#f59e0b;font-size:10px;margin-bottom:5px;opacity:.85">⚠ Sin señal hace ${fmtStale(staleH)}</div>`
+    : '';
+
+  const rows = p.on_ground
+    ? `<div><span style="color:#475569">STATUS</span> <span style="color:#e2e8f0">En tierra</span></div>
+       ${loc ? `<div style="color:${color};margin-top:2px;font-size:12px">${loc}</div>` : ''}`
+    : `<div><span style="color:#475569">ALT</span> <span style="color:#e2e8f0">${alt}</span> <span style="color:#fbbf2466;font-size:10px">${fl}</span></div>
+       <div><span style="color:#475569">SPD</span> <span style="color:#e2e8f0">${vel}</span></div>
+       <div><span style="color:#475569">HDG</span> <span style="color:#e2e8f0">${hdg}</span></div>`;
+
+  return `<div style="background:#0a1120;border:1px solid ${color}44;border-radius:8px;padding:10px 14px;
+    min-width:165px;font-family:ui-monospace,monospace;font-size:11px;line-height:1.9;
+    box-shadow:0 8px 32px #00000099,0 0 0 1px ${color}18">
+    <div style="font-size:14px;font-weight:700;color:${color};margin-bottom:5px;letter-spacing:.06em">${p.tail_number}</div>
+    ${staleBadge}
+    <div style="color:#94a3b8">${rows}</div>
+    <div style="color:#334155;font-size:10px;margin-top:6px;border-top:1px solid #1e293b;padding-top:5px">${p.source}</div>
+  </div>`;
+}
+
+// ---------------------------------------------------------------------------
+// Component
+// ---------------------------------------------------------------------------
+export default function FleetMap({
+  positions,
+  trail,
+}: {
+  positions: Position[];
+  trail?: [number, number][];
+}) {
+  const containerRef  = useRef<HTMLDivElement>(null);
+  const mapRef        = useRef<maplibregl.Map | null>(null);
+  const readyRef      = useRef(false);
+  const pulseFrameRef = useRef(0);
+
+  // Keep latest prop values accessible from the map.on('load') closure
+  // without re-running the init effect.
+  const positionsRef = useRef(positions);
+  const trailRef     = useRef(trail);
+  positionsRef.current = positions;
+  trailRef.current     = trail;
+
+  // ── Map init (runs once) ──────────────────────────────────────────────────
   useEffect(() => {
     if (!containerRef.current || mapRef.current) return;
 
@@ -169,6 +209,7 @@ export default function FleetMap({ positions, trail }: { positions: Position[]; 
     map.addControl(new maplibregl.ScaleControl({ unit: 'metric' }), 'bottom-right');
 
     map.on('load', () => {
+      // ── Trail ──────────────────────────────────────────────────────────
       map.addSource('trail', {
         type: 'geojson',
         data: { type: 'Feature', geometry: { type: 'LineString', coordinates: [] }, properties: {} },
@@ -185,74 +226,160 @@ export default function FleetMap({ positions, trail }: { positions: Position[]; 
         source: 'trail',
         paint: { 'line-color': '#f59e0b', 'line-width': 1.5, 'line-opacity': 0.65, 'line-dasharray': [5, 3] },
       });
-      trailReady.current = true;
+
+      // ── SDF plane icon (registered once, recolored per-feature via icon-color) ──
+      map.addImage('plane-icon', makePlaneIconData(64), { sdf: true });
+
+      // ── Aircraft GeoJSON source ────────────────────────────────────────
+      map.addSource('aircraft', {
+        type: 'geojson',
+        data: buildGeoJSON(positionsRef.current) as unknown as maplibregl.GeoJSONSourceSpecification['data'],
+      });
+
+      // Pulse ring — rendered in the same WebGL pass, airborne only
+      map.addLayer({
+        id: 'aircraft-pulse',
+        type: 'circle',
+        source: 'aircraft',
+        filter: ['==', ['get', 'on_ground'], false],
+        paint: {
+          'circle-radius': [
+            'interpolate', ['linear'], ['zoom'],
+            3, 8,
+            10, 14,
+          ],
+          'circle-color': 'transparent',
+          'circle-stroke-color': ['get', 'color'],
+          'circle-stroke-width': 1.5,
+          'circle-stroke-opacity': 0.6,
+        },
+      });
+
+      // Aircraft symbol — icon drawn in WebGL at the exact geographic coordinate.
+      // icon-rotate uses the map projection's north reference (rotation-alignment:'map')
+      // so the heading is always correct regardless of map bearing or zoom.
+      map.addLayer({
+        id: 'aircraft-layer',
+        type: 'symbol',
+        source: 'aircraft',
+        layout: {
+          'icon-image': 'plane-icon',
+          'icon-size': [
+            'interpolate', ['linear'], ['zoom'],
+            3,  0.30,
+            8,  0.50,
+            13, 0.75,
+          ],
+          'icon-rotate':               ['get', 'heading'],
+          'icon-rotation-alignment':   'map',
+          'icon-pitch-alignment':      'map',
+          'icon-allow-overlap':        true,
+          'icon-ignore-placement':     true,
+        },
+        paint: {
+          'icon-color':       ['get', 'color'],
+          'icon-halo-color':  ['get', 'color'],
+          'icon-halo-width':  2,
+          'icon-halo-blur':   1,
+          'icon-opacity': [
+            'case',
+            ['all', ['get', 'on_ground'], ['get', 'stale']], 0.35,
+            ['get', 'on_ground'],                            0.55,
+            /* airborne */                                   1.0,
+          ],
+        },
+      });
+
+      // Tail label below the icon
+      map.addLayer({
+        id: 'aircraft-labels',
+        type: 'symbol',
+        source: 'aircraft',
+        minzoom: 6,
+        layout: {
+          'text-field':         ['get', 'tail_number'],
+          'text-font':          ['literal', ['Open Sans Bold', 'Arial Unicode MS Bold']],
+          'text-size':          10,
+          'text-offset':        [0, 1.8],
+          'text-anchor':        'top',
+          'text-allow-overlap': false,
+        },
+        paint: {
+          'text-color':       ['get', 'color'],
+          'text-halo-color':  '#000000cc',
+          'text-halo-width':  1.5,
+          'text-opacity': [
+            'case',
+            ['get', 'on_ground'], 0.6,
+            1.0,
+          ],
+        },
+      });
+
+      // ── Click → popup ──────────────────────────────────────────────────
+      map.on('click', 'aircraft-layer', (e) => {
+        if (!e.features?.length) return;
+        const f      = e.features[0];
+        const coords = (f.geometry as unknown as { coordinates: [number, number] }).coordinates;
+        const props  = f.properties as Record<string, unknown>;
+        new maplibregl.Popup({ closeButton: false, className: 'fleet-popup', offset: 12 })
+          .setLngLat(coords)
+          .setHTML(buildPopupHTML(props))
+          .addTo(map);
+      });
+      map.on('mouseenter', 'aircraft-layer', () => { map.getCanvas().style.cursor = 'pointer'; });
+      map.on('mouseleave', 'aircraft-layer', () => { map.getCanvas().style.cursor = ''; });
+
+      // ── Pulse animation (drives circle-stroke-opacity in WebGL) ───────
+      const animate = () => {
+        const t = (Date.now() % 2200) / 2200;
+        // Smooth sine: 0.75 at t=0, 0 at t=0.5, 0.75 at t=1
+        const opacity = 0.75 * (0.5 + 0.5 * Math.cos(2 * Math.PI * t));
+        if (map.getLayer('aircraft-pulse')) {
+          map.setPaintProperty('aircraft-pulse', 'circle-stroke-opacity', opacity);
+        }
+        pulseFrameRef.current = requestAnimationFrame(animate);
+      };
+      pulseFrameRef.current = requestAnimationFrame(animate);
+
+      // Populate trail if data already arrived before map finished loading
+      const t0 = trailRef.current;
+      if (t0 && t0.length > 1) {
+        (map.getSource('trail') as maplibregl.GeoJSONSource).setData({
+          type: 'Feature',
+          geometry: { type: 'LineString', coordinates: t0.map(([la, lo]) => [lo, la]) },
+          properties: {},
+        });
+      }
+
+      readyRef.current = true;
     });
 
     mapRef.current = map;
     return () => {
-      trailReady.current = false;
+      cancelAnimationFrame(pulseFrameRef.current);
+      readyRef.current = false;
       map.remove();
       mapRef.current = null;
     };
   }, []);
 
-  // Update trail
+  // ── Trail updates ─────────────────────────────────────────────────────────
   useEffect(() => {
-    const map = mapRef.current;
-    if (!map || !trailReady.current) return;
-    const src = map.getSource('trail') as maplibregl.GeoJSONSource | undefined;
+    if (!readyRef.current) return;
+    const src = mapRef.current?.getSource('trail') as maplibregl.GeoJSONSource | undefined;
     if (!src) return;
-    const coords = (trail ?? []).map(([lat, lon]) => [lon, lat]);
+    const coords = (trail ?? []).map(([la, lo]) => [lo, la]);
     src.setData({ type: 'Feature', geometry: { type: 'LineString', coordinates: coords }, properties: {} });
   }, [trail]);
 
-  // Update markers
+  // ── Aircraft position updates ─────────────────────────────────────────────
+  // Single setData call per update — MapLibre diffs and re-renders in one frame.
   useEffect(() => {
-    const map = mapRef.current;
-    if (!map) return;
-
-    const seen = new Set<string>();
-
-    for (const pos of positions) {
-      if (pos.lat == null || pos.lon == null) continue;
-
-      const lng = pos.on_ground && pos.airport_lon != null ? pos.airport_lon : pos.lon;
-      const lat = pos.on_ground && pos.airport_lat != null ? pos.airport_lat : pos.lat;
-      const color = getColor(pos.tail_number);
-      const key = pos.icao24;
-      seen.add(key);
-
-      const entry = markersRef.current.get(key);
-
-      if (entry && entry.onGround === pos.on_ground) {
-        entry.marker.setLngLat([lng, lat]);
-        const plane = entry.marker.getElement().querySelector<HTMLElement>('.fleet-plane');
-        if (plane && pos.heading != null) {
-          plane.style.transform = `rotate(${pos.heading}deg)`;
-        }
-        entry.marker.setPopup(
-          new maplibregl.Popup({ offset: 20, closeButton: false, className: 'fleet-popup' })
-            .setHTML(buildPopupHTML(pos, color))
-        );
-      } else {
-        entry?.marker.remove();
-        const el = createMarkerEl(pos, color);
-        const popup = new maplibregl.Popup({ offset: 20, closeButton: false, className: 'fleet-popup' })
-          .setHTML(buildPopupHTML(pos, color));
-        const marker = new maplibregl.Marker({ element: el, anchor: 'center' })
-          .setLngLat([lng, lat])
-          .setPopup(popup)
-          .addTo(map);
-        markersRef.current.set(key, { marker, onGround: pos.on_ground });
-      }
-    }
-
-    for (const [key, { marker }] of markersRef.current) {
-      if (!seen.has(key)) {
-        marker.remove();
-        markersRef.current.delete(key);
-      }
-    }
+    if (!readyRef.current) return;
+    const src = mapRef.current?.getSource('aircraft') as maplibregl.GeoJSONSource | undefined;
+    if (!src) return;
+    src.setData(buildGeoJSON(positions) as unknown as maplibregl.GeoJSONSourceSpecification['data']);
   }, [positions]);
 
   const airborne = positions.filter(p => p.lat != null && !p.on_ground);
