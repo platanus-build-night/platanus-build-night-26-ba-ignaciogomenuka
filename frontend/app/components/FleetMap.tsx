@@ -183,7 +183,6 @@ export default function FleetMap({
   const containerRef  = useRef<HTMLDivElement>(null);
   const mapRef        = useRef<maplibregl.Map | null>(null);
   const readyRef      = useRef(false);
-  const pulseFrameRef = useRef(0);
 
   // Keep latest prop values accessible from the map.on('load') closure
   // without re-running the init effect.
@@ -236,25 +235,6 @@ export default function FleetMap({
         data: buildGeoJSON(positionsRef.current) as unknown as maplibregl.GeoJSONSourceSpecification['data'],
       });
 
-      // Pulse ring — rendered in the same WebGL pass, airborne only
-      map.addLayer({
-        id: 'aircraft-pulse',
-        type: 'circle',
-        source: 'aircraft',
-        filter: ['==', ['get', 'on_ground'], false],
-        paint: {
-          'circle-radius': [
-            'interpolate', ['linear'], ['zoom'],
-            3, 8,
-            10, 14,
-          ],
-          'circle-color': 'transparent',
-          'circle-stroke-color': ['get', 'color'],
-          'circle-stroke-width': 1.5,
-          'circle-stroke-opacity': 0.6,
-        },
-      });
-
       // Aircraft symbol — icon drawn in WebGL at the exact geographic coordinate.
       // icon-rotate uses the map projection's north reference (rotation-alignment:'map')
       // so the heading is always correct regardless of map bearing or zoom.
@@ -277,10 +257,7 @@ export default function FleetMap({
           'icon-ignore-placement':     true,
         },
         paint: {
-          'icon-color':       ['get', 'color'],
-          'icon-halo-color':  ['get', 'color'],
-          'icon-halo-width':  2,
-          'icon-halo-blur':   1,
+          'icon-color':   ['get', 'color'],
           'icon-opacity': [
             'case',
             ['all', ['get', 'on_ground'], ['get', 'stale']], 0.35,
@@ -330,18 +307,6 @@ export default function FleetMap({
       map.on('mouseenter', 'aircraft-layer', () => { map.getCanvas().style.cursor = 'pointer'; });
       map.on('mouseleave', 'aircraft-layer', () => { map.getCanvas().style.cursor = ''; });
 
-      // ── Pulse animation (drives circle-stroke-opacity in WebGL) ───────
-      const animate = () => {
-        const t = (Date.now() % 2200) / 2200;
-        // Smooth sine: 0.75 at t=0, 0 at t=0.5, 0.75 at t=1
-        const opacity = 0.75 * (0.5 + 0.5 * Math.cos(2 * Math.PI * t));
-        if (map.getLayer('aircraft-pulse')) {
-          map.setPaintProperty('aircraft-pulse', 'circle-stroke-opacity', opacity);
-        }
-        pulseFrameRef.current = requestAnimationFrame(animate);
-      };
-      pulseFrameRef.current = requestAnimationFrame(animate);
-
       // Populate trail if data already arrived before map finished loading
       const t0 = trailRef.current;
       if (t0 && t0.length > 1) {
@@ -357,7 +322,6 @@ export default function FleetMap({
 
     mapRef.current = map;
     return () => {
-      cancelAnimationFrame(pulseFrameRef.current);
       readyRef.current = false;
       map.remove();
       mapRef.current = null;
