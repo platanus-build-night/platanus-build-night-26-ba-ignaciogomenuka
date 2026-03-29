@@ -661,6 +661,23 @@ export default function Dashboard() {
     return matchSearch && matchStatus;
   });
 
+  // Fleet table rows — always includes every known plane, even without position data.
+  const fleetRows = useMemo(() => {
+    const q = search.toLowerCase();
+    return PLANES
+      .filter(plane => {
+        if (q && !plane.tail.toLowerCase().includes(q) && !plane.icao24.toLowerCase().includes(q)) return false;
+        const pos = (displaySnap?.latest_positions ?? []).find(p => p.icao24 === plane.icao24);
+        if (statusFilter === 'in_air')    return pos != null && !pos.on_ground;
+        if (statusFilter === 'on_ground') return pos == null || pos.on_ground;
+        return true;
+      })
+      .map(plane => ({
+        plane,
+        pos: (displaySnap?.latest_positions ?? []).find(p => p.icao24 === plane.icao24) ?? null,
+      }));
+  }, [search, statusFilter, displaySnap]);
+
   // Live feed: exclude completed flights (TAKEOFF that has a matching LANDING, and LANDING events)
   const allFeedEvents = displaySnap?.last_50_events ?? [];
   const landedTakeoffKeys = new Set<string>();
@@ -1198,7 +1215,7 @@ export default function Dashboard() {
                 <option value="in_air">In Air</option>
                 <option value="on_ground">On Ground</option>
               </select>
-              {!isLoading && <span className="text-gray-600">{filteredPositions.length} aircraft</span>}
+              {!isLoading && <span className="text-gray-600">{fleetRows.length} aircraft</span>}
             </div>
           )}
 
@@ -1234,9 +1251,9 @@ export default function Dashboard() {
                   <Skeleton className="h-4 w-20" />
                 </div>
               ))}
-              {!isLoading && filteredPositions.map(p => {
-                const { status: fs } = availStatus(p, lastLandingByAircraft[p.icao24] ?? null);
-                const tailColor = TAIL_COLORS[p.tail_number] ?? 'text-gray-200';
+              {!isLoading && fleetRows.map(({ plane, pos }) => {
+                const { status: fs } = availStatus(pos ?? undefined, lastLandingByAircraft[plane.icao24] ?? null);
+                const tailColor = TAIL_COLORS[plane.tail] ?? 'text-gray-200';
                 const fsLabel =
                   fs === 'in_flight' ? 'En vuelo' : fs === 'stale' ? 'Sin señal' :
                   fs === 'turning' ? 'Rotando' : fs === 'unknown' ? 'Sin datos' : 'En tierra';
@@ -1247,20 +1264,20 @@ export default function Dashboard() {
                   fs === 'unknown'   ? 'bg-gray-800 text-gray-600' :
                                       'bg-gray-700 text-gray-400';
                 return (
-                  <div key={p.icao24} className="px-3 py-2.5">
+                  <div key={plane.icao24} className="px-3 py-2.5">
                     <div className="flex items-center justify-between mb-1.5">
-                      <span className={`font-mono font-bold text-sm ${tailColor}`}>{p.tail_number}</span>
+                      <span className={`font-mono font-bold text-sm ${tailColor}`}>{plane.tail}</span>
                       <span className={`text-xs px-2 py-0.5 rounded font-bold uppercase ${fsBadge}`}>{fsLabel}</span>
                     </div>
                     <div className="flex items-center justify-between text-xs text-gray-400">
-                      <span className="font-mono text-amber-400">{p.location ?? '—'}</span>
-                      <span>{p.velocity != null ? `${Math.round(p.velocity)} km/h` : '—'}</span>
-                      <span className="text-gray-500">{relTime(p.ts)}</span>
+                      <span className="font-mono text-amber-400">{pos?.location ?? '—'}</span>
+                      <span>{pos?.velocity != null ? `${Math.round(pos.velocity)} km/h` : '—'}</span>
+                      <span className="text-gray-500">{pos?.ts ? relTime(pos.ts) : '—'}</span>
                     </div>
                   </div>
                 );
               })}
-              {!isLoading && filteredPositions.length === 0 && (
+              {!isLoading && fleetRows.length === 0 && (
                 <div className="px-3 py-6 text-center text-gray-600 text-xs">
                   {search || statusFilter !== 'all' ? 'No aircraft match your filters.' : 'No aircraft positions recorded yet.'}
                 </div>
@@ -1285,8 +1302,9 @@ export default function Dashboard() {
                     ))}
                   </tr>
                 ))}
-                {!isLoading && filteredPositions.map(p => {
-                  const { status: fs } = availStatus(p, lastLandingByAircraft[p.icao24] ?? null);
+                {!isLoading && fleetRows.map(({ plane, pos }) => {
+                  const { status: fs } = availStatus(pos ?? undefined, lastLandingByAircraft[plane.icao24] ?? null);
+                  const tailColor = TAIL_COLORS[plane.tail] ?? 'text-gray-200';
                   const fsBadge =
                     fs === 'in_flight' ? 'bg-green-900/80 text-green-300 ring-1 ring-green-800' :
                     fs === 'stale'     ? 'bg-yellow-900/80 text-yellow-300 ring-1 ring-yellow-800 animate-pulse' :
@@ -1299,31 +1317,31 @@ export default function Dashboard() {
                     fs === 'turning'   ? 'Rotando' :
                     fs === 'unknown'   ? 'Sin datos' : 'En tierra';
                   return (
-                  <tr key={p.icao24} className="hover:bg-gray-800/40 transition-colors">
-                    <td className="px-3 py-1.5 font-semibold text-white">{p.tail_number}</td>
-                    <td className="px-3 py-1.5 text-gray-400 font-mono">{p.icao24}</td>
+                  <tr key={plane.icao24} className="hover:bg-gray-800/40 transition-colors">
+                    <td className={`px-3 py-1.5 font-semibold ${tailColor}`}>{plane.tail}</td>
+                    <td className="px-3 py-1.5 text-gray-400 font-mono">{plane.icao24}</td>
                     <td className="px-3 py-1.5">
                       <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold uppercase ${fsBadge}`}>
                         {fsLabel}
                       </span>
                     </td>
                     <td className="px-3 py-1.5">
-                      {p.location
+                      {pos?.location
                         ? <span className={`font-mono font-bold text-xs ${fs === 'stale' ? 'text-amber-600' : 'text-amber-400'}`}>
-                            {p.location}
+                            {pos.location}
                             {fs === 'stale' && <span className="text-gray-600 font-normal ml-1">último</span>}
                           </span>
                         : <span className="text-gray-600">—</span>}
                     </td>
-                    <td className="px-3 py-1.5 text-gray-300">{p.altitude != null ? `${Math.round(p.altitude)} ft` : '—'}</td>
-                    <td className="px-3 py-1.5 text-gray-300">{p.velocity != null ? `${Math.round(p.velocity)} km/h` : '—'}</td>
-                    <td className="px-3 py-1.5 text-gray-300">{p.heading != null ? `${Math.round(p.heading)}°` : '—'}</td>
-                    <td className="px-3 py-1.5 text-gray-500">{p.source}</td>
-                    <td className="px-3 py-1.5 text-gray-500">{relTime(p.ts)}</td>
+                    <td className="px-3 py-1.5 text-gray-300">{pos?.altitude != null ? `${Math.round(pos.altitude)} ft` : '—'}</td>
+                    <td className="px-3 py-1.5 text-gray-300">{pos?.velocity != null ? `${Math.round(pos.velocity)} km/h` : '—'}</td>
+                    <td className="px-3 py-1.5 text-gray-300">{pos?.heading != null ? `${Math.round(pos.heading)}°` : '—'}</td>
+                    <td className="px-3 py-1.5 text-gray-500">{pos?.source ?? '—'}</td>
+                    <td className="px-3 py-1.5 text-gray-500">{pos?.ts ? relTime(pos.ts) : '—'}</td>
                   </tr>
                   );
                 })}
-                {!isLoading && filteredPositions.length === 0 && (
+                {!isLoading && fleetRows.length === 0 && (
                   <tr>
                     <td colSpan={9} className="px-3 py-6 text-center text-gray-600 text-xs">
                       {search || statusFilter !== 'all' ? 'No aircraft match your filters.' : 'No aircraft positions recorded yet.'}
